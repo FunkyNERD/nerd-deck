@@ -75,3 +75,7 @@ systemd user unit.
   has been gone for a while.
 - Add icons on buttons, and multiple button pages.
 - Report IP addresses on the Network tab.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
