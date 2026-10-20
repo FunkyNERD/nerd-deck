@@ -1,13 +1,15 @@
-# systemd user unit.
-# Install: cp nerd-deck.service ~/.config/systemd/user/ && systemctl --user enable --now nerd-deck
+# systemd user unit, installed by host/install.sh.
+# Tied to the graphical session so button commands that open windows can
+# reach the display.
 [Unit]
 Description=nerd-deck system stats display
+PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.cargo/bin/nerd-deck
+ExecStart=%h/.local/bin/nerd-deck
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

@@ -64,9 +64,31 @@ streams stats. It reconnects automatically if the device is unplugged or reset.
 Buttons are defined only in the host config. The device sends just a button `id`,
 so it can't trigger anything that isn't in that file.
 
-Serial permissions and autostart files are in `host/packaging/`: a udev rule
-(grants the logged-in user access and adds a `/dev/nerd-deck` symlink) and a
-systemd user unit.
+### Installing
+
+```bash
+host/install.sh
+```
+
+This builds a release binary and installs it to `~/.local/bin/nerd-deck`. It
+creates `~/.config/nerd-deck/config.toml` from the example (an existing config is
+never overwritten), installs the udev rule from `host/packaging/` (asks for sudo),
+and enables a systemd user service that runs with your graphical session.
+Re-running it upgrades in place.
+
+| Option | Effect |
+|---|---|
+| `--no-udev` | skip the udev rule; no sudo needed |
+| `--no-service` | don't install or enable the service |
+| `--uninstall` | remove the binary, service and udev rule (the config is kept) |
+
+Stop the service before flashing firmware, because it holds the serial port:
+
+```bash
+systemctl --user stop nerd-deck
+```
+
+Logs: `journalctl --user -u nerd-deck -f`
 
 ## Next steps
 

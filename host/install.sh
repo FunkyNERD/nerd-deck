@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Build and install the nerd-deck host app for the current user.
+#
+#   ./install.sh               build, install binary, config, udev rule, service
+#   ./install.sh --no-udev     skip the udev rule (no sudo needed)
+#   ./install.sh --no-service  don't install/enable the systemd user service
+#   ./install.sh --uninstall   remove everything this script installed (config is kept)
+
+set -euo pipefail
+
+HOST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nerd-deck"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UDEV_RULE=/etc/udev/rules.d/99-nerd-deck.rules
+SERVICE=nerd-deck.service
+
+do_udev=1
+do_service=1
+uninstall=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-udev) do_udev=0 ;;
+        --no-service) do_service=0 ;;
+        --uninstall) uninstall=1 ;;
+        -h | --help)
+            sed -n '2,8s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
+            exit 0
+            ;;
+        *)
+            echo "unknown option: $arg (see --help)" >&2
+            exit 1
+            ;;
+    esac
+done
+
+info() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
+die() {
+    printf '\033[1;31merror:\033[0m %s\n' "$*" >&2
+    exit 1
+}
+
+uninstall() {
+    if systemctl --user list-unit-files "$SERVICE" &>/dev/null; then
+        info "Stopping and disabling $SERVICE"
+        systemctl --user disable --now "$SERVICE" 2>/dev/null || true
+    fi
+    rm -f "$UNIT_DIR/$SERVICE"
+    systemctl --user daemon-reload 2>/dev/null || true
+
+    info "Removing $BIN_DIR/nerd-deck"
+    rm -f "$BIN_DIR/nerd-deck"
+
+    if [[ -e $UDEV_RULE ]]; then
+        info "Removing $UDEV_RULE (needs sudo)"
+        sudo rm -f "$UDEV_RULE"
+        sudo udevadm control --reload
+    fi
+
+    info "Done. Config left in $CONFIG_DIR"
+}
+
+check_deps() {
+    command -v cargo >/dev/null ||
+        die "cargo not found. Install Rust: https://rustup.rs (then: source ~/.cargo/env)"
+    command -v pkg-config >/dev/null && pkg-config --exists libudev ||
+        die "libudev headers not found. Install them: sudo apt install build-essential pkg-config libudev-dev"
+}
+
+install_binary() {
+    info "Building release binary"
+    cargo build --release --locked --manifest-path "$HOST_DIR/Cargo.toml"
+
+    info "Installing $BIN_DIR/nerd-deck"
+    install -Dm755 "$HOST_DIR/target/release/nerd-deck" "$BIN_DIR/nerd-deck"
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *) warn "$BIN_DIR is not on your PATH; the service doesn't need it, but your shell does" ;;
+    esac
+}
+
+install_config() {
+    if [[ -e $CONFIG_DIR/config.toml ]]; then
+        info "Keeping existing $CONFIG_DIR/config.toml"
+    else
+        info "Creating $CONFIG_DIR/config.toml from the example"
+        install -Dm644 "$HOST_DIR/config.example.toml" "$CONFIG_DIR/config.toml"
+        warn "the example config has a Suspend button; edit $CONFIG_DIR/config.toml to taste"
+    fi
+}
+
+install_udev() {
+    info "Installing udev rule to $UDEV_RULE (needs sudo)"
+    sudo install -m644 "$HOST_DIR/packaging/99-nerd-deck.rules" "$UDEV_RULE"
+    sudo udevadm control --reload
+    sudo udevadm trigger --subsystem-match=tty --attr-match=idVendor=303a
+}
+
+install_service() {
+    info "Installing and enabling $SERVICE"
+    install -Dm644 "$HOST_DIR/packaging/$SERVICE" "$UNIT_DIR/$SERVICE"
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE"
+    # restart rather than start so a re-run picks up the new binary
+    systemctl --user restart "$SERVICE"
+}
+
+if ((uninstall)); then
+    uninstall
+    exit 0
+fi
+
+check_deps
+install_binary
+install_config
+((do_udev)) && install_udev
+((do_service)) && install_service
+
+info "Installed."
+if ((do_service)); then
+    echo "    Logs:    journalctl --user -u nerd-deck -f"
+    echo "    Stop:    systemctl --user stop nerd-deck   (do this before flashing firmware)"
+else
+    echo "    Run:     $BIN_DIR/nerd-deck"
+fi
