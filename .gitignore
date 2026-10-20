@@ -1,0 +1,4 @@
+/firmware/.pio/
+/firmware/.vscode/
+/host/target/
+/.claude/settings.local.json*

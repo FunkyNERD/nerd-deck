@@ -1,0 +1,13 @@
+# systemd user unit.
+# Install: cp nerd-deck.service ~/.config/systemd/user/ && systemctl --user enable --now nerd-deck
+[Unit]
+Description=nerd-deck system stats display
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/nerd-deck
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

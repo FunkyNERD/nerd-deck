@@ -1,0 +1,50 @@
+# Copy to ~/.config/nerd-deck/config.toml
+
+[device]
+# port = "/dev/ttyACM0"   # skip auto-detection
+vid = 0x303a              # Espressif
+pid = 0x1001              # USB-Serial-JTAG (ESP32-S3 native USB)
+baud = 115200
+
+[stats]
+interval_ms = 1000
+# interface = "enp5s0"    # default: busiest non-loopback interface
+mounts = ["/", "/home"]   # the device shows up to 4
+
+# Up to 12 buttons, laid out 4x3 on the Controls tab in this order.
+# Commands run via `sh -c` as the user running nerd-deck.
+
+[[button]]
+id = "lock"
+label = "Lock"
+command = "loginctl lock-session"
+
+[[button]]
+id = "mute"
+label = "Mute"
+command = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+
+[[button]]
+id = "vol_down"
+label = "Vol -"
+command = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+
+[[button]]
+id = "vol_up"
+label = "Vol +"
+command = "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+
+[[button]]
+id = "play_pause"
+label = "Play / Pause"
+command = "playerctl play-pause"
+
+[[button]]
+id = "terminal"
+label = "Terminal"
+command = "x-terminal-emulator"
+
+[[button]]
+id = "suspend"
+label = "Suspend"
+command = "systemctl suspend"
