@@ -1,0 +1,15 @@
+#!/bin/sh
+# Shared by the .deb (postinst) and .rpm (%post); neither passes arguments we need.
+set -e
+
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload || true
+    udevadm trigger --subsystem-match=tty --attr-match=idVendor=303a || true
+fi
+
+cat <<'MSG'
+nerd-deck installed. For each user who wants it:
+    mkdir -p ~/.config/nerd-deck
+    cp /usr/share/doc/nerd-deck/config.example.toml ~/.config/nerd-deck/config.toml
+    systemctl --user enable --now nerd-deck
+MSG

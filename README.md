@@ -109,6 +109,29 @@ systemctl --user stop nerd-deck
 
 Logs: `journalctl --user -u nerd-deck -f`
 
+### Packages
+
+Each release has a `.deb` and an `.rpm` (x86_64, glibc 2.35 or newer: Debian 12+,
+Ubuntu 22.04+, Fedora 36+). They install the binary to `/usr/bin`, the udev rule,
+the systemd user unit and the example config in `/usr/share/doc/nerd-deck/`. The
+service isn't enabled for anyone, so each user sets it up:
+
+```bash
+mkdir -p ~/.config/nerd-deck
+cp /usr/share/doc/nerd-deck/config.example.toml ~/.config/nerd-deck/config.toml
+systemctl --user enable --now nerd-deck
+```
+
+CI builds both packages on every push (`.github/workflows/host-packages.yml`). To
+cut a release, set the
+version in `host/Cargo.toml`, commit, then push a matching tag such as `v0.2.0`.
+To build the packages locally:
+
+```bash
+cargo install --locked cargo-deb cargo-generate-rpm
+host/packaging/build-packages.sh   # writes host/dist/
+```
+
 ## Next steps
 
 - Add GPU stats (NVML for NVIDIA, `/sys/class/drm` for AMD).

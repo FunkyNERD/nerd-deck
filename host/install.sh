@@ -100,7 +100,8 @@ install_udev() {
 
 install_service() {
     info "Installing and enabling $SERVICE"
-    install -Dm644 "$HOST_DIR/packaging/$SERVICE" "$UNIT_DIR/$SERVICE"
+    mkdir -p "$UNIT_DIR"
+    sed "s|^ExecStart=.*|ExecStart=$BIN_DIR/nerd-deck|" "$HOST_DIR/packaging/$SERVICE" >"$UNIT_DIR/$SERVICE"
     systemctl --user daemon-reload
     systemctl --user enable "$SERVICE"
     # restart rather than start so a re-run picks up the new binary

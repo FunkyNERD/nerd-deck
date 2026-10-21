@@ -22,3 +22,36 @@ serde_json = "1"
 serialport = "4"
 sysinfo = "0.32"
 toml = "0.8"
+
+[profile.release]
+strip = true
+
+# Packaging: host/packaging/build-packages.sh runs `cargo deb` and
+# `cargo generate-rpm` with these. Both packages install the same files.
+[package.metadata.deb]
+maintainer = "Jamie Carl <jamie@hazaar.io>"
+section = "utils"
+depends = "$auto"
+extended-description = """\
+Collects CPU, memory, network and disk stats and streams them over USB to a \
+nerd-deck desk display (WT32-SC01 Plus), and runs the commands bound to its \
+touch buttons. Runs as a systemd user service; enable it with \
+`systemctl --user enable --now nerd-deck`."""
+maintainer-scripts = "packaging/scripts/"
+assets = [
+    ["target/release/nerd-deck", "usr/bin/", "755"],
+    ["packaging/99-nerd-deck.rules", "usr/lib/udev/rules.d/", "644"],
+    ["packaging/nerd-deck.service", "usr/lib/systemd/user/", "644"],
+    ["config.example.toml", "usr/share/doc/nerd-deck/", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Streams system stats to a nerd-deck display over USB and runs its button commands"
+post_install_script = "packaging/scripts/postinst"
+post_uninstall_script = "packaging/scripts/postrm"
+assets = [
+    { source = "target/release/nerd-deck", dest = "/usr/bin/nerd-deck", mode = "755" },
+    { source = "packaging/99-nerd-deck.rules", dest = "/usr/lib/udev/rules.d/99-nerd-deck.rules", mode = "644" },
+    { source = "packaging/nerd-deck.service", dest = "/usr/lib/systemd/user/nerd-deck.service", mode = "644" },
+    { source = "config.example.toml", dest = "/usr/share/doc/nerd-deck/config.example.toml", mode = "644", doc = true },
+]

@@ -1,4 +1,5 @@
-# systemd user unit, installed by host/install.sh.
+# systemd user unit. The .deb/.rpm install it as-is; host/install.sh rewrites
+# ExecStart to point at ~/.local/bin.
 # Tied to the graphical session so button commands that open windows can
 # reach the display.
 [Unit]
@@ -7,7 +8,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=%h/.local/bin/nerd-deck
+ExecStart=/usr/bin/nerd-deck
 Restart=on-failure
 RestartSec=5
 
