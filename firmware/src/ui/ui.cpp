@@ -1,7 +1,9 @@
 #include "ui.hpp"
 
+#include <esp_heap_caps.h>
 #include <lvgl.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "protocol.hpp"
 
@@ -43,7 +45,16 @@ lv_obj_t* diskLabels[kMaxDisks];
 // Controls tab
 lv_obj_t* buttonGrid;
 lv_obj_t* noButtonsLabel;
-ButtonDef buttons[kMaxButtons];
+struct ButtonSlot {
+    ButtonDef def;
+    lv_obj_t* btn;
+    lv_obj_t* img;      // created once all pixels are in
+    lv_img_dsc_t dsc;   // points at `pixels`
+    uint8_t* pixels;
+    size_t received;
+};
+ButtonSlot slots[kMaxButtons];
+size_t slotCount = 0;
 
 // Overlays
 lv_obj_t* statusBanner;
@@ -181,9 +192,22 @@ void buildNetworkTab(lv_obj_t* tab) {
     }
 }
 
+void freeImage(ButtonSlot& slot) {
+    if (slot.img) {
+        lv_obj_del(slot.img);
+        slot.img = nullptr;
+    }
+    if (slot.pixels) {
+        lv_img_cache_invalidate_src(&slot.dsc);
+        heap_caps_free(slot.pixels);
+        slot.pixels = nullptr;
+    }
+    slot.received = 0;
+}
+
 void onButtonClicked(lv_event_t* e) {
     const auto idx = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
-    if (idx < kMaxButtons) protocol::sendPress(buttons[idx].id);
+    if (idx < slotCount) protocol::sendPress(slots[idx].def.id);
 }
 
 void buildControlsTab(lv_obj_t* tab) {
@@ -323,25 +347,85 @@ void updateStats(const HostStats& s) {
 }
 
 void setButtons(const ButtonDef* defs, size_t count) {
+    // Deletes the buttons and their lv_img children, after which the pixels
+    // they pointed at can be freed.
     lv_obj_clean(buttonGrid);
-    if (count > kMaxButtons) count = kMaxButtons;
+    for (auto& slot : slots) {
+        slot.img = nullptr;  // already deleted with its button
+        freeImage(slot);
+    }
 
-    for (size_t i = 0; i < count; i++) {
-        buttons[i] = defs[i];
+    slotCount = count > kMaxButtons ? kMaxButtons : count;
+    for (size_t i = 0; i < slotCount; i++) {
+        ButtonSlot& slot = slots[i];
+        slot.def = defs[i];
+
         lv_obj_t* btn = lv_btn_create(buttonGrid);
+        slot.btn = btn;
         lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, i % 4, 1, LV_GRID_ALIGN_STRETCH, i / 4, 1);
         lv_obj_add_event_cb(btn, onButtonClicked, LV_EVENT_CLICKED,
                             reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        // Image or icon stacked above the label.
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_ver(btn, 4, 0);
+        lv_obj_set_style_pad_row(btn, 4, 0);
+
+        if (slot.def.icon[0] && !slot.def.has_image) {
+            lv_obj_t* icon = lv_label_create(btn);
+            lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
+            lv_label_set_text(icon, slot.def.icon);
+        }
+
         lv_obj_t* label = lv_label_create(btn);
-        lv_label_set_text(label, buttons[i].label);
+        lv_label_set_text(label, slot.def.label);
         lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(label, LV_PCT(100));
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_center(label);
     }
 
-    if (count) lv_obj_add_flag(noButtonsLabel, LV_OBJ_FLAG_HIDDEN);
+    if (slotCount) lv_obj_add_flag(noButtonsLabel, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_clear_flag(noButtonsLabel, LV_OBJ_FLAG_HIDDEN);
+}
+
+void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_t total,
+                    const uint8_t* data, size_t len) {
+    ButtonSlot* slot = nullptr;
+    for (size_t i = 0; i < slotCount; i++)
+        if (strcmp(slots[i].def.id, id) == 0) slot = &slots[i];
+    if (!slot) return;
+
+    if (w == 0 || h == 0 || w > kMaxImageSide || h > kMaxImageSide ||
+        total != size_t(w) * h * LV_IMG_PX_SIZE_ALPHA_BYTE)
+        return;
+
+    if (offset == 0) {
+        freeImage(*slot);
+        slot->pixels = static_cast<uint8_t*>(heap_caps_malloc(total, MALLOC_CAP_SPIRAM));
+        if (!slot->pixels) slot->pixels = static_cast<uint8_t*>(malloc(total));
+        if (!slot->pixels) return;
+        slot->dsc = {};
+        slot->dsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
+        slot->dsc.header.w = w;
+        slot->dsc.header.h = h;
+        slot->dsc.data_size = total;
+        slot->dsc.data = slot->pixels;
+    }
+
+    // Out-of-order or oversized chunk: drop the partial image.
+    if (!slot->pixels || offset != slot->received || offset + len > total) {
+        freeImage(*slot);
+        return;
+    }
+
+    memcpy(slot->pixels + offset, data, len);
+    slot->received += len;
+
+    if (slot->received == total) {
+        slot->img = lv_img_create(slot->btn);
+        lv_img_set_src(slot->img, &slot->dsc);
+        lv_obj_move_to_index(slot->img, 0);
+    }
 }
 
 void setConnected(bool connected) {

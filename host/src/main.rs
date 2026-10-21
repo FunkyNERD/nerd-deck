@@ -2,6 +2,8 @@ mod actions;
 mod collector;
 mod config;
 mod device;
+mod icons;
+mod images;
 mod protocol;
 
 use std::path::PathBuf;
@@ -10,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
+use base64::Engine;
 use clap::Parser;
 
 use collector::Collector;
@@ -18,6 +21,10 @@ use device::Connection;
 use protocol::{ButtonDef, DeviceMsg, HostMsg, PROTO_VERSION};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+
+/// Decoded bytes per `image` message; base64 keeps each line well under the
+/// device's 2 KB limit.
+const IMAGE_CHUNK: usize = 1024;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -127,7 +134,25 @@ fn send_buttons(cfg: &Config, conn: &mut Connection) -> Result<()> {
         .map(|b| ButtonDef {
             id: b.id.clone(),
             label: b.label.clone(),
+            icon: b.icon.as_deref().and_then(icons::lookup).map(String::from),
+            image: b.image_data.is_some(),
         })
         .collect();
-    conn.send(&HostMsg::Buttons { buttons })
+    conn.send(&HostMsg::Buttons { buttons })?;
+
+    for b in &cfg.buttons {
+        let Some(img) = &b.image_data else { continue };
+        for (i, chunk) in img.data.chunks(IMAGE_CHUNK).enumerate() {
+            conn.send(&HostMsg::Image {
+                id: b.id.clone(),
+                w: img.width,
+                h: img.height,
+                fmt: images::FORMAT,
+                offset: i * IMAGE_CHUNK,
+                total: img.data.len(),
+                data: base64::engine::general_purpose::STANDARD.encode(chunk),
+            })?;
+        }
+    }
+    Ok(())
 }

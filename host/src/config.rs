@@ -1,7 +1,15 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
+
+use crate::icons;
+use crate::images::{self, ButtonImage};
+
+// Limits imposed by the firmware (firmware/src/config.hpp, stats.hpp).
+const MAX_BUTTONS: usize = 12;
+const MAX_ID_LEN: usize = 23;
+const MAX_LABEL_LEN: usize = 31;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -62,6 +70,15 @@ pub struct ButtonConfig {
     /// Run with `sh -c`. Only commands from this file are ever executed; the
     /// device can only refer to them by id.
     pub command: String,
+    /// Name of a built-in LVGL symbol, e.g. "mute" (see icons.rs).
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// PNG/JPEG/BMP file; `~/` and paths relative to the config file work.
+    #[serde(default)]
+    pub image: Option<PathBuf>,
+    /// `image`, loaded and converted to the device's pixel format.
+    #[serde(skip)]
+    pub image_data: Option<ButtonImage>,
 }
 
 impl Config {
@@ -89,22 +106,71 @@ impl Config {
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
 
-        let cfg: Self =
+        let mut cfg: Self =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         cfg.validate()?;
+        cfg.load_images(path.parent().unwrap_or(Path::new(".")))?;
         Ok(cfg)
     }
 
     fn validate(&self) -> Result<()> {
+        ensure!(
+            self.buttons.len() <= MAX_BUTTONS,
+            "{} buttons configured; the device shows at most {MAX_BUTTONS}",
+            self.buttons.len()
+        );
         let mut seen = std::collections::HashSet::new();
         for b in &self.buttons {
-            anyhow::ensure!(seen.insert(&b.id), "duplicate button id {:?}", b.id);
+            ensure!(seen.insert(&b.id), "duplicate button id {:?}", b.id);
+            ensure!(
+                !b.id.is_empty() && b.id.len() <= MAX_ID_LEN,
+                "button id {:?} must be 1-{MAX_ID_LEN} bytes",
+                b.id
+            );
+            ensure!(
+                b.label.len() <= MAX_LABEL_LEN,
+                "button {:?}: label must be at most {MAX_LABEL_LEN} bytes",
+                b.id
+            );
+            ensure!(
+                b.icon.is_none() || b.image.is_none(),
+                "button {:?}: set either icon or image, not both",
+                b.id
+            );
+            if let Some(icon) = &b.icon {
+                ensure!(
+                    icons::lookup(icon).is_some(),
+                    "button {:?}: unknown icon {icon:?}; available: {}",
+                    b.id,
+                    icons::names().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn load_images(&mut self, config_dir: &Path) -> Result<()> {
+        for b in &mut self.buttons {
+            if let Some(path) = &b.image {
+                let path = resolve_path(config_dir, path);
+                let img = images::load(&path).with_context(|| format!("button {:?}", b.id))?;
+                log::debug!("button {:?}: {} -> {}x{}", b.id, path.display(), img.width, img.height);
+                b.image_data = Some(img);
+            }
         }
         Ok(())
     }
 
     pub fn button(&self, id: &str) -> Option<&ButtonConfig> {
         self.buttons.iter().find(|b| b.id == id)
+    }
+}
+
+fn resolve_path(config_dir: &Path, path: &Path) -> PathBuf {
+    if let (Ok(rest), Some(home)) = (path.strip_prefix("~"), dirs::home_dir()) {
+        home.join(rest)
+    } else {
+        config_dir.join(path)
     }
 }
 
@@ -118,5 +184,32 @@ mod tests {
         cfg.validate().unwrap();
         assert_eq!(cfg.device.vid, 0x303a);
         assert!(!cfg.buttons.is_empty());
+    }
+
+    fn parse(toml: &str) -> Result<Config> {
+        let cfg: Config = toml::from_str(toml)?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    #[test]
+    fn rejects_unknown_icon() {
+        let err = parse("[[button]]\nid='a'\nlabel='A'\ncommand='true'\nicon='nope'").unwrap_err();
+        assert!(err.to_string().contains("unknown icon"));
+    }
+
+    #[test]
+    fn rejects_icon_and_image() {
+        let toml = "[[button]]\nid='a'\nlabel='A'\ncommand='true'\nicon='mute'\nimage='x.png'";
+        assert!(parse(toml).is_err());
+    }
+
+    #[test]
+    fn resolves_image_paths() {
+        let dir = Path::new("/etc/nerd-deck");
+        assert_eq!(resolve_path(dir, Path::new("a.png")), Path::new("/etc/nerd-deck/a.png"));
+        assert_eq!(resolve_path(dir, Path::new("/x/a.png")), Path::new("/x/a.png"));
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(resolve_path(dir, Path::new("~/a.png")), home.join("a.png"));
     }
 }

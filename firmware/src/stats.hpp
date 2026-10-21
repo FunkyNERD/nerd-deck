@@ -37,4 +37,6 @@ struct HostStats {
 struct ButtonDef {
     char id[24];
     char label[32];
+    char icon[8];    // UTF-8 LVGL symbol, or empty
+    bool has_image;  // pixels follow in `image` messages
 };

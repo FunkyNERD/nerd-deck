@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump together with `kProtoVersion` in firmware/src/config.hpp.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 
 /// Messages the host sends to the device.
 #[derive(Debug, Serialize)]
@@ -24,6 +24,20 @@ pub enum HostMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         msg: Option<String>,
     },
+    /// One chunk of a button image. Sent after `Buttons`, in order, for each
+    /// button with `image: true`.
+    Image {
+        id: String,
+        w: u32,
+        h: u32,
+        fmt: &'static str,
+        /// Byte offset of this chunk within the decoded image.
+        offset: usize,
+        /// Decoded size of the whole image.
+        total: usize,
+        /// Base64 of this chunk's bytes.
+        data: String,
+    },
 }
 
 /// Messages the device sends to the host.
@@ -40,6 +54,12 @@ pub enum DeviceMsg {
 pub struct ButtonDef {
     pub id: String,
     pub label: String,
+    /// A built-in LVGL symbol glyph, sent as text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// An `Image` message for this button follows.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub image: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <mbedtls/base64.h>
 
 #include "config.hpp"
 #include "stats.hpp"
@@ -72,9 +73,25 @@ void handleButtons(JsonObjectConst o) {
         if (count >= kMaxButtons) break;
         strlcpy(defs[count].id, b["id"] | "", sizeof defs[count].id);
         strlcpy(defs[count].label, b["label"] | defs[count].id, sizeof defs[count].label);
+        strlcpy(defs[count].icon, b["icon"] | "", sizeof defs[count].icon);
+        defs[count].has_image = b["image"] | false;
         count++;
     }
     ui::setButtons(defs, count);
+}
+
+void handleImage(JsonObjectConst o) {
+    if (strcmp(o["fmt"] | "", "rgb565a8") != 0) return;
+
+    static uint8_t buf[kMaxImageChunk];
+    const char* b64 = o["data"] | "";
+    size_t len = 0;
+    if (mbedtls_base64_decode(buf, sizeof buf, &len, reinterpret_cast<const unsigned char*>(b64),
+                              strlen(b64)) != 0)
+        return;
+
+    ui::setButtonImage(o["id"] | "", o["w"] | 0u, o["h"] | 0u, o["offset"] | 0u, o["total"] | 0u,
+                       buf, len);
 }
 
 void handleAck(JsonObjectConst o) {
@@ -99,6 +116,8 @@ void handleLine(const char* line, size_t len) {
         handleStats(o);
     } else if (strcmp(type, "buttons") == 0) {
         handleButtons(o);
+    } else if (strcmp(type, "image") == 0) {
+        handleImage(o);
     } else if (strcmp(type, "ack") == 0) {
         handleAck(o);
     } else if (strcmp(type, "hello") == 0) {

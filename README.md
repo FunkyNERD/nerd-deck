@@ -64,6 +64,11 @@ streams stats. It reconnects automatically if the device is unplugged or reset.
 Buttons are defined only in the host config. The device sends just a button `id`,
 so it can't trigger anything that isn't in that file.
 
+Each button can show a built-in symbol (`icon = "mute"`) or a picture
+(`image = "~/icons/obs.png"`, PNG, JPEG or BMP) above its label. The host scales
+images to fit 40×40 and sends them to the device each time it sends the button
+layout. See `host/config.example.toml` for the icon names.
+
 ### Installing
 
 ```bash
@@ -95,7 +100,7 @@ Logs: `journalctl --user -u nerd-deck -f`
 - Add GPU stats (NVML for NVIDIA, `/sys/class/drm` for AMD).
 - Add a host-driven `brightness` message, and a screen-off timer once the host
   has been gone for a while.
-- Add icons on buttons, and multiple button pages.
+- Add multiple button pages.
 - Report IP addresses on the Network tab.
 
 ## License

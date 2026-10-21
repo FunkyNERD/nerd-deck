@@ -1,4 +1,4 @@
-# nerd-deck wire protocol (v1)
+# nerd-deck wire protocol (v2)
 
 Transport: USB CDC serial (ESP32-S3 USB-Serial-JTAG, `303a:1001`). Baud is
 ignored on native USB.
@@ -15,7 +15,7 @@ Bump `PROTO_VERSION` / `kProtoVersion` together on breaking changes.
 ### `hello`
 Sent on connect. The device replies with its own `hello`.
 ```json
-{"type":"hello","proto":1,"host":"workstation"}
+{"type":"hello","proto":2,"host":"workstation"}
 ```
 
 ### `stats`
@@ -38,10 +38,34 @@ Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
 
 ### `buttons`
 The layout for the Controls tab: up to 12 buttons, shown 4×3. Sent on connect and
-again whenever the device says `hello`.
+again whenever the device says `hello`. The device then rebuilds the grid and
+frees any previous images.
 ```json
-{"type":"buttons","buttons":[{"id":"lock","label":"Lock"}]}
+{"type":"buttons","buttons":[
+  {"id":"mute","label":"Mute","icon":"\uF026"},
+  {"id":"obs","label":"OBS","image":true},
+  {"id":"lock","label":"Lock"}
+]}
 ```
+- `id`: 1–23 bytes. `label`: up to 31 bytes.
+- `icon` (optional): a built-in LVGL symbol, sent as its UTF-8 character. The
+  host maps config names to characters (`host/src/icons.rs`).
+- `image` (optional): `true` means `image` messages for this button follow.
+  It's never set together with `icon`.
+
+### `image`
+Pixels for one button, split into chunks that follow the `buttons` message in
+order. The image appears once all `total` bytes have arrived. A chunk that arrives
+out of order discards that partial image.
+```json
+{"type":"image","id":"obs","w":40,"h":40,"fmt":"rgb565a8",
+ "offset":0,"total":4800,"data":"<base64>"}
+```
+- `fmt` is always `rgb565a8`: 3 bytes per pixel, row-major. Each pixel is the
+  RGB565 colour (big-endian) followed by 8-bit alpha. This is LVGL 8's
+  `LV_IMG_CF_TRUE_COLOR_ALPHA` with `LV_COLOR_16_SWAP=1`.
+- `total` is always `w * h * 3`. `w` and `h` are at most 64; the host scales to fit 40×40.
+- `data` is the base64 of this chunk: at most 1024 decoded bytes, at most 1536 accepted.
 
 ### `ack`
 The result of a `press`. `msg` is optional.
@@ -55,7 +79,7 @@ The result of a `press`. `msg` is optional.
 ### `hello`
 Sent on boot and in reply to the host's `hello`.
 ```json
-{"type":"hello","fw":"0.1.0","proto":1}
+{"type":"hello","fw":"0.2.0","proto":2}
 ```
 
 ### `press`
@@ -64,3 +88,7 @@ command for it. The device never sends a command string.
 ```json
 {"type":"press","id":"lock"}
 ```
+
+## Changes
+
+- **v2**: added the `icon` and `image` button fields and the `image` message.

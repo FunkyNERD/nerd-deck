@@ -13,38 +13,54 @@ mounts = ["/", "/home"]   # the device shows up to 4
 
 # Up to 12 buttons, laid out 4x3 on the Controls tab in this order.
 # Commands run via `sh -c` as the user running nerd-deck.
+#
+# Each button can show either:
+#   icon  = a built-in symbol name (an unknown name lists the valid ones), e.g.
+#           audio video play pause stop prev next mute volume_mid volume_max
+#           power settings home refresh keyboard wifi bluetooth usb bell
+#           envelope file directory save edit trash eye_open eye_close ...
+#   image = a PNG/JPEG/BMP, scaled to fit 40x40. `~/` works; relative paths
+#           are relative to this file.
 
 [[button]]
 id = "lock"
 label = "Lock"
 command = "loginctl lock-session"
+icon = "eye_close"
 
 [[button]]
 id = "mute"
 label = "Mute"
 command = "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+icon = "mute"
 
 [[button]]
 id = "vol_down"
 label = "Vol -"
 command = "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+icon = "volume_mid"
 
 [[button]]
 id = "vol_up"
 label = "Vol +"
 command = "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"
+icon = "volume_max"
 
 [[button]]
 id = "play_pause"
 label = "Play / Pause"
 command = "playerctl play-pause"
+icon = "play"
 
 [[button]]
 id = "terminal"
 label = "Terminal"
 command = "x-terminal-emulator"
+icon = "keyboard"
+# image = "icons/terminal.png"   # instead of icon
 
 [[button]]
 id = "suspend"
 label = "Suspend"
 command = "systemctl suspend"
+icon = "power"
