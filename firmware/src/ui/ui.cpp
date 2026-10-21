@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "config.hpp"
 #include "protocol.hpp"
 
 namespace ui {
@@ -69,8 +70,20 @@ struct ButtonSlot {
 ButtonSlot slots[kMaxButtons];
 size_t slotCount = 0;
 
+// Waiting screen: covers everything while the host isn't connected.
+constexpr uint32_t kWaitBg = 0x0B0E13;
+constexpr uint32_t kWaitAccent = 0x26C6DA;
+constexpr uint32_t kWaitMarkColors[] = {0x26C6DA, 0x66BB6A, 0xFFA726};
+constexpr lv_coord_t kWaitBarHeights[] = {30, 56, 40};
+lv_obj_t* waitScreen;
+lv_obj_t* waitBars[3];
+lv_obj_t* waitWord;
+lv_obj_t* waitTag;
+lv_obj_t* waitPill;
+lv_obj_t* waitRing;
+bool waitShown = false;
+
 // Overlays
-lv_obj_t* statusBanner;
 lv_obj_t* toast;
 lv_timer_t* toastTimer;
 
@@ -293,15 +306,211 @@ void buildControlsTab(lv_obj_t* tab) {
     lv_obj_center(noButtonsLabel);
 }
 
+// A plain filled rectangle, without the theme's styles.
+lv_obj_t* makeRect(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, uint32_t color, lv_coord_t radius) {
+    lv_obj_t* r = lv_obj_create(parent);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_size(r, w, h);
+    lv_obj_set_style_bg_color(r, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(r, radius, 0);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+    return r;
+}
+
+lv_obj_t* makeWaitLabel(lv_obj_t* parent, const lv_font_t* font, uint32_t color, const char* text) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_label_set_text(l, text);
+    return l;
+}
+
+void buildWaitScreen() {
+    waitScreen = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(waitScreen);
+    lv_obj_set_size(waitScreen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(waitScreen, lv_color_hex(kWaitBg), 0);
+    lv_obj_set_style_bg_opa(waitScreen, LV_OPA_COVER, 0);
+    noScroll(waitScreen);  // stays clickable, so it swallows touches meant for the tabs below
+
+    // Three-colour stripe along the top edge.
+    for (size_t i = 0; i < 3; i++)
+        lv_obj_set_pos(makeRect(waitScreen, kScreenWidth / 3, 3, kWaitMarkColors[i], 0),
+                       i * (kScreenWidth / 3), 0);
+
+    lv_obj_t* col = lv_obj_create(waitScreen);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(col, 6, 0);
+    lv_obj_align(col, LV_ALIGN_CENTER, 0, -14);
+
+    // Mark: three bars, bottom-aligned, like a tiny stats graph.
+    lv_obj_t* mark = lv_obj_create(col);
+    lv_obj_remove_style_all(mark);
+    // 12 px taller than the bars: extra space above the wordmark (LVGL 8 has no margins).
+    lv_obj_set_size(mark, 3 * 14 + 2 * 6, kWaitBarHeights[1] + 12);
+    for (size_t i = 0; i < 3; i++) {
+        waitBars[i] = makeRect(mark, 14, kWaitBarHeights[i], kWaitMarkColors[i], 3);
+        lv_obj_align(waitBars[i], LV_ALIGN_BOTTOM_LEFT, i * 20, -12);  // stays bottom-aligned as it resizes
+    }
+
+    char word[48];
+    snprintf(word, sizeof word, "nerd#%06X -#deck", static_cast<unsigned>(kWaitAccent));
+    waitWord = makeWaitLabel(col, &lv_font_montserrat_40, 0xECEFF4, word);
+    lv_label_set_recolor(waitWord, true);
+
+    // The built-in fonts are ASCII plus LVGL's symbols, so the separator is LV_SYMBOL_BULLET.
+    waitTag = makeWaitLabel(col, &lv_font_montserrat_12, 0x9AA4B2,
+                            "SYSTEM STATS  " LV_SYMBOL_BULLET "  TOUCH CONTROLS");
+    lv_obj_set_style_text_letter_space(waitTag, 3, 0);
+
+    // Status pill with a pulsing dot.
+    waitPill = lv_obj_create(waitScreen);
+    lv_obj_remove_style_all(waitPill);
+    lv_obj_set_size(waitPill, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(waitPill, lv_color_hex(0x151B24), 0);
+    lv_obj_set_style_bg_opa(waitPill, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(waitPill, lv_color_hex(0x232C38), 0);
+    lv_obj_set_style_border_width(waitPill, 1, 0);
+    lv_obj_set_style_radius(waitPill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(waitPill, 16, 0);
+    lv_obj_set_style_pad_ver(waitPill, 8, 0);
+    lv_obj_set_style_pad_column(waitPill, 10, 0);
+    lv_obj_set_flex_flow(waitPill, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(waitPill, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(waitPill, LV_ALIGN_BOTTOM_MID, 0, -24);
+
+    lv_obj_t* dot = lv_obj_create(waitPill);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 8, 8);
+    lv_obj_add_flag(dot, LV_OBJ_FLAG_OVERFLOW_VISIBLE);  // the ring grows past it
+    waitRing = makeRect(dot, 8, 8, kWaitAccent, LV_RADIUS_CIRCLE);
+    lv_obj_center(waitRing);
+    lv_obj_center(makeRect(dot, 8, 8, kWaitAccent, LV_RADIUS_CIRCLE));
+
+    makeWaitLabel(waitPill, &lv_font_montserrat_12, 0xC3CAD5, "Waiting for host");
+
+    lv_obj_t* ver = makeWaitLabel(waitScreen, &lv_font_montserrat_12, 0x8792A2, "fw " FW_VERSION);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
+}
+
+void waitBarExec(void* bar, int32_t h) { lv_obj_set_height(static_cast<lv_obj_t*>(bar), h); }
+
+// After the bars grow in they keep rising and falling, out of step, so the
+// screen never looks frozen.
+void waitBarIdle(lv_anim_t* grown) {
+    const auto i = reinterpret_cast<uintptr_t>(grown->user_data);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, waitBars[i]);
+    lv_anim_set_exec_cb(&a, waitBarExec);
+    lv_anim_set_values(&a, kWaitBarHeights[i], kWaitBarHeights[i] * 55 / 100);
+    lv_anim_set_time(&a, 1200);
+    lv_anim_set_playback_time(&a, 1200);
+    lv_anim_set_delay(&a, 300 + i * 280);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+void waitOpaExec(void* obj, int32_t v) {
+    lv_obj_set_style_opa(static_cast<lv_obj_t*>(obj), static_cast<lv_opa_t>(v), 0);
+}
+
+void waitRiseExec(void* obj, int32_t v) {
+    lv_obj_set_style_translate_y(static_cast<lv_obj_t*>(obj), static_cast<lv_coord_t>(v), 0);
+}
+
+void fadeUp(lv_obj_t* obj, uint32_t delay) {
+    lv_obj_set_style_opa(obj, LV_OPA_TRANSP, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_time(&a, 600);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&a, waitOpaExec);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_start(&a);
+    lv_anim_set_exec_cb(&a, waitRiseExec);
+    lv_anim_set_values(&a, 6, 0);
+    lv_anim_start(&a);
+}
+
+// v: 0..1000 through one pulse; the ring grows to 2.6x and fades out.
+void waitRingExec(void* ring, int32_t v) {
+    auto* obj = static_cast<lv_obj_t*>(ring);
+    const lv_coord_t d = 8 + 13 * v / 1000;
+    lv_obj_set_size(obj, d, d);
+    lv_obj_set_style_opa(obj, static_cast<lv_opa_t>(153 * (1000 - v) / 1000), 0);
+}
+
+void startWaitAnims() {
+    for (size_t i = 0; i < 3; i++) {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, waitBars[i]);
+        lv_anim_set_user_data(&a, reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        lv_anim_set_exec_cb(&a, waitBarExec);
+        lv_anim_set_values(&a, kWaitBarHeights[i] * 15 / 100, kWaitBarHeights[i]);
+        lv_anim_set_time(&a, 900);
+        lv_anim_set_delay(&a, i * 120);
+        lv_anim_set_early_apply(&a, true);  // start short, not full height
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_set_ready_cb(&a, waitBarIdle);
+        lv_anim_start(&a);
+    }
+    fadeUp(waitWord, 350);
+    fadeUp(waitTag, 550);
+    fadeUp(waitPill, 800);
+
+    lv_anim_t ring;
+    lv_anim_init(&ring);
+    lv_anim_set_var(&ring, waitRing);
+    lv_anim_set_exec_cb(&ring, waitRingExec);
+    lv_anim_set_values(&ring, 0, 1000);
+    lv_anim_set_time(&ring, 1600);
+    lv_anim_set_repeat_count(&ring, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&ring, lv_anim_path_ease_out);
+    lv_anim_start(&ring);
+}
+
+void stopWaitAnims() {
+    for (lv_obj_t* bar : waitBars) lv_anim_del(bar, nullptr);
+    lv_anim_del(waitWord, nullptr);
+    lv_anim_del(waitTag, nullptr);
+    lv_anim_del(waitPill, nullptr);
+    lv_anim_del(waitRing, nullptr);
+}
+
+void showWaitScreen() {
+    lv_anim_del(waitScreen, nullptr);  // a fade-out still running
+    lv_obj_set_style_opa(waitScreen, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(waitScreen, LV_OBJ_FLAG_HIDDEN);
+    startWaitAnims();
+}
+
+void hideWaitScreen() {
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, waitScreen);
+    lv_anim_set_exec_cb(&a, waitOpaExec);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_time(&a, 250);
+    lv_anim_set_ready_cb(&a, [](lv_anim_t*) {
+        lv_obj_add_flag(waitScreen, LV_OBJ_FLAG_HIDDEN);
+        stopWaitAnims();
+    });
+    lv_anim_start(&a);
+}
+
 void buildOverlays() {
-    statusBanner = lv_label_create(lv_layer_top());
-    lv_label_set_text(statusBanner, LV_SYMBOL_USB "  Waiting for host...");
-    lv_obj_set_width(statusBanner, LV_PCT(100));
-    lv_obj_set_style_text_align(statusBanner, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_bg_color(statusBanner, lv_palette_darken(LV_PALETTE_RED, 2), 0);
-    lv_obj_set_style_bg_opa(statusBanner, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_ver(statusBanner, 4, 0);
-    lv_obj_align(statusBanner, LV_ALIGN_BOTTOM_MID, 0, 0);
+    buildWaitScreen();
+    waitShown = true;  // until the host's first message
+    startWaitAnims();
 
     toast = lv_label_create(lv_layer_top());
     lv_obj_set_style_bg_opa(toast, LV_OPA_90, 0);
@@ -574,9 +783,10 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
 }
 
 void setConnected(bool connected) {
-    const bool hidden = lv_obj_has_flag(statusBanner, LV_OBJ_FLAG_HIDDEN);
-    if (connected && !hidden) lv_obj_add_flag(statusBanner, LV_OBJ_FLAG_HIDDEN);
-    else if (!connected && hidden) lv_obj_clear_flag(statusBanner, LV_OBJ_FLAG_HIDDEN);
+    if (connected != waitShown) return;
+    waitShown = !connected;
+    if (connected) hideWaitScreen();
+    else showWaitScreen();
 }
 
 void showToast(const char* text, bool ok) {

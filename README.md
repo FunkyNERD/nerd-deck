@@ -56,7 +56,7 @@ UART on the extension header.
 | `src/main.cpp` | setup/loop |
 | `src/display.cpp` | panel + touch → LVGL drivers |
 | `src/protocol.cpp` | line framing, JSON decode, `hello`/`press` |
-| `src/ui/ui.cpp` | System / Network / Controls tabs, status banner, toasts |
+| `src/ui/ui.cpp` | System / Network / Controls tabs, waiting-for-host screen, toasts |
 | `src/config.hpp` | version, limits, timeouts |
 
 ## Host app
