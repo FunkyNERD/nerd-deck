@@ -48,6 +48,10 @@ lv_coord_t rxPoints[kNetHistory + 1];
 lv_coord_t txPoints[kNetHistory + 1];
 float netScaleFrom = 1.0f, netScaleTo = 1.0f, netScale = 1.0f;  // bytes/s at top of chart
 uint32_t lastStatsMs = 0;
+// The scroll runs on its own clock rather than stepping per sample: stats
+// arrive with ~±75 ms jitter, which made a per-sample scroll stall and jump.
+float netPeriodMs = 1000.0f;  // smoothed stats interval = time per scroll step
+bool netScrolling = false;
 lv_obj_t* diskBars[kMaxDisks];
 lv_obj_t* diskLabels[kMaxDisks];
 
@@ -329,31 +333,9 @@ void netScaleExec(void*, int32_t v) {
 
 void netScrollExec(void* chart, int32_t x) { lv_obj_set_x(static_cast<lv_obj_t*>(chart), x); }
 
-void pushNetHistory(float rx, float tx) {
-    memmove(rxHist, rxHist + 1, kNetHistory * sizeof(float));
-    memmove(txHist, txHist + 1, kNetHistory * sizeof(float));
-    rxHist[kNetHistory] = rx;
-    txHist[kNetHistory] = tx;
-
-    // Scroll: the data just moved left one point, so jump the chart back to x=0
-    // (which looks identical) and slide it one step over the next interval.
-    const uint32_t now = lv_tick_get();
-    uint32_t interval = lastStatsMs ? now - lastStatsMs : 1000;
-    lastStatsMs = now;
-    if (interval < 200) interval = 200;
-    if (interval > 3000) interval = 3000;
-
-    lv_anim_t scroll;
-    lv_anim_init(&scroll);
-    lv_anim_set_var(&scroll, netChart);
-    lv_anim_set_exec_cb(&scroll, netScrollExec);
-    lv_anim_set_values(&scroll, 0, -netStep);
-    lv_anim_set_time(&scroll, interval);
-    lv_anim_set_path_cb(&scroll, lv_anim_path_linear);
-    lv_anim_start(&scroll);
-
-    // Scale: lv_coord_t is 16-bit, so plot relative to the peak in view, and
-    // ease toward a new peak instead of snapping.
+// Plot relative to the peak in view (lv_coord_t is 16-bit), easing toward a
+// new peak instead of snapping.
+void updateNetScale() {
     float peak = 1.0f;
     for (size_t i = 0; i <= kNetHistory; i++) {
         if (rxHist[i] > peak) peak = rxHist[i];
@@ -363,7 +345,7 @@ void pushNetHistory(float rx, float tx) {
     fmtBytes(static_cast<uint64_t>(peak), buf, sizeof buf);
     lv_label_set_text_fmt(netPeakLabel, "%s/s", buf);
 
-    renormaliseNet();  // the new point, at the current scale
+    renormaliseNet();
     if (peak != netScaleTo) {
         netScaleFrom = netScale;
         netScaleTo = peak;
@@ -376,6 +358,60 @@ void pushNetHistory(float rx, float tx) {
         lv_anim_set_path_cb(&scale, lv_anim_path_ease_out);
         lv_anim_start(&scale);
     }
+}
+
+void netStepDone(lv_anim_t*);
+
+// Slide the chart one point spacing left over one period.
+void startNetStep() {
+    lv_obj_set_x(netChart, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, netChart);
+    lv_anim_set_exec_cb(&a, netScrollExec);
+    lv_anim_set_values(&a, 0, -netStep);
+    lv_anim_set_time(&a, static_cast<uint32_t>(netPeriodMs));
+    lv_anim_set_path_cb(&a, lv_anim_path_linear);
+    lv_anim_set_ready_cb(&a, netStepDone);
+    lv_anim_start(&a);
+    netScrolling = true;
+}
+
+// A step finished: shift the data one point left and jump the chart back to
+// x=0, which looks identical. The new right-edge point repeats the last value
+// until a sample arrives to replace it.
+void netStepDone(lv_anim_t*) {
+    memmove(rxHist, rxHist + 1, kNetHistory * sizeof(float));
+    memmove(txHist, txHist + 1, kNetHistory * sizeof(float));
+    rxHist[kNetHistory] = rxHist[kNetHistory - 1];
+    txHist[kNetHistory] = txHist[kNetHistory - 1];
+    updateNetScale();
+
+    if (lv_tick_elaps(lastStatsMs) < kHostTimeoutMs) {
+        startNetStep();
+    } else {
+        // Host gone: stop rather than scroll flat lines forever.
+        lv_obj_set_x(netChart, 0);
+        netScrolling = false;
+    }
+}
+
+void onNetSample(float rx, float tx) {
+    const uint32_t now = lv_tick_get();
+    if (lastStatsMs) {
+        float gap = static_cast<float>(now - lastStatsMs);
+        if (gap < 200) gap = 200;
+        if (gap > 3000) gap = 3000;
+        netPeriodMs += (gap - netPeriodMs) * 0.2f;
+    }
+    lastStatsMs = now;
+
+    // The right-edge point is the one scrolling into view; show the sample there now.
+    rxHist[kNetHistory] = rx;
+    txHist[kNetHistory] = tx;
+    updateNetScale();
+
+    if (!netScrolling) startNetStep();
 }
 
 }  // namespace
@@ -436,7 +472,7 @@ void updateStats(const HostStats& s) {
     lv_label_set_text_fmt(rxLabel, LV_SYMBOL_DOWNLOAD " %s/s", a);
     fmtBytes(s.net.tx_bps, a, sizeof a);
     lv_label_set_text_fmt(txLabel, LV_SYMBOL_UPLOAD " %s/s", a);
-    pushNetHistory(static_cast<float>(s.net.rx_bps), static_cast<float>(s.net.tx_bps));
+    onNetSample(static_cast<float>(s.net.rx_bps), static_cast<float>(s.net.tx_bps));
 
     // Disks
     for (size_t i = 0; i < kMaxDisks; i++) {
