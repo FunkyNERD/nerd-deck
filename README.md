@@ -33,9 +33,23 @@ for the protocol.
 cd firmware && pio run -t upload
 ```
 
-If upload doesn't start, hold **BOOT** while pressing **RST** to enter the
-bootloader. `Serial` carries the protocol, so keep debug prints off it (use a
-UART on the extension header if you need logs).
+Stop the host service first (`systemctl --user stop nerd-deck`), because it
+holds the serial port. If upload doesn't start, hold **BOOT** while pressing
+**RST** to enter the bootloader.
+
+Debug build flags:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DNERD_PERF -DNERD_START_TAB=1" pio run -t upload
+```
+
+- `NERD_PERF` prints a `perf fps=... busy=...` line every second. The host logs
+  it at `RUST_LOG=debug`.
+- `NERD_START_TAB=n` opens on tab `n` (0 System, 1 Network, 2 Controls).
+
+`Serial` carries the protocol. The host skips lines that aren't JSON, so a short
+plain-text line like the perf output is harmless. For anything chattier, use a
+UART on the extension header.
 
 | File | Purpose |
 |---|---|

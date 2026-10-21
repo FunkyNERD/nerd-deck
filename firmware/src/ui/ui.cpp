@@ -10,8 +10,11 @@
 namespace ui {
 namespace {
 
-constexpr size_t kNetHistory = 60;
+constexpr size_t kNetHistory = 60;  // visible points
 constexpr lv_coord_t kNetChartMax = 1000;
+
+// Value changes ease over this long.
+constexpr uint32_t kAnimMs = 500;
 
 const lv_color_t kRxColor = lv_palette_main(LV_PALETTE_CYAN);
 const lv_color_t kTxColor = lv_palette_main(LV_PALETTE_ORANGE);
@@ -20,8 +23,7 @@ const lv_color_t kTxColor = lv_palette_main(LV_PALETTE_ORANGE);
 lv_obj_t* cpuArc;
 lv_obj_t* cpuLabel;
 lv_obj_t* cpuInfoLabel;
-lv_obj_t* coreChart;
-lv_chart_series_t* coreSeries;
+lv_obj_t* coreBars[kMaxCores];
 lv_obj_t* memBar;
 lv_obj_t* memLabel;
 lv_obj_t* swapBar;
@@ -32,13 +34,20 @@ lv_obj_t* infoLabel;
 lv_obj_t* netTitle;
 lv_obj_t* rxLabel;
 lv_obj_t* txLabel;
+// The chart is one point wider than its clipping parent and slides left by one
+// point spacing per stats interval, so the graph scrolls continuously.
+lv_obj_t* netClip;
 lv_obj_t* netChart;
+lv_obj_t* netPeakLabel;
 lv_chart_series_t* rxSeries;
 lv_chart_series_t* txSeries;
-float rxHist[kNetHistory];
-float txHist[kNetHistory];
-lv_coord_t rxPoints[kNetHistory];
-lv_coord_t txPoints[kNetHistory];
+lv_coord_t netStep;  // px between points
+float rxHist[kNetHistory + 1];
+float txHist[kNetHistory + 1];
+lv_coord_t rxPoints[kNetHistory + 1];
+lv_coord_t txPoints[kNetHistory + 1];
+float netScaleFrom = 1.0f, netScaleTo = 1.0f, netScale = 1.0f;  // bytes/s at top of chart
+uint32_t lastStatsMs = 0;
 lv_obj_t* diskBars[kMaxDisks];
 lv_obj_t* diskLabels[kMaxDisks];
 
@@ -86,7 +95,25 @@ lv_obj_t* makeBar(lv_obj_t* parent, lv_coord_t w) {
     lv_obj_t* bar = lv_bar_create(parent);
     lv_obj_set_size(bar, w, 12);
     lv_bar_set_range(bar, 0, 100);
+    lv_obj_set_style_anim_time(bar, kAnimMs, 0);
     return bar;
+}
+
+// CPU gauge: sweep the arc and count the percentage along with it.
+void cpuAnimExec(void* arc, int32_t v) {
+    lv_arc_set_value(static_cast<lv_obj_t*>(arc), static_cast<int16_t>(v));
+    lv_label_set_text_fmt(cpuLabel, "%d%%", static_cast<int>(v));
+}
+
+void animateCpu(int32_t target) {
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, cpuArc);
+    lv_anim_set_exec_cb(&a, cpuAnimExec);
+    lv_anim_set_values(&a, lv_arc_get_value(cpuArc), target);
+    lv_anim_set_time(&a, kAnimMs);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);  // replaces any running animation on the arc
 }
 
 void noScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
@@ -136,17 +163,27 @@ void buildSystemTab(lv_obj_t* tab) {
     lv_label_set_text(infoLabel, "");
     lv_obj_set_pos(infoLabel, colX, 90);
 
-    // Per-core usage across the bottom.
-    coreChart = lv_chart_create(tab);
-    lv_obj_set_size(coreChart, LV_PCT(100), 80);
-    lv_obj_align(coreChart, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_chart_set_type(coreChart, LV_CHART_TYPE_BAR);
-    lv_chart_set_range(coreChart, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
-    lv_chart_set_div_line_count(coreChart, 0, 0);
-    // LVGL 8.3 bar charts divide by (point_cnt - 1), so never go below 2 points.
-    lv_chart_set_point_count(coreChart, 2);
-    coreSeries = lv_chart_add_series(coreChart, lv_palette_main(LV_PALETTE_GREEN),
-                                     LV_CHART_AXIS_PRIMARY_Y);
+    // Per-core usage across the bottom: one vertical bar per core, shown as
+    // the host reports them. Separate bars (not lv_chart) so each animates.
+    lv_obj_t* coreRow = lv_obj_create(tab);
+    lv_obj_set_size(coreRow, LV_PCT(100), 80);
+    lv_obj_align(coreRow, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_flex_flow(coreRow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(coreRow, 6, 0);
+    lv_obj_set_style_pad_column(coreRow, 3, 0);
+    noScroll(coreRow);
+    for (size_t i = 0; i < kMaxCores; i++) {
+        lv_obj_t* bar = lv_bar_create(coreRow);
+        lv_bar_set_range(bar, 0, 100);
+        lv_obj_set_height(bar, LV_PCT(100));
+        lv_obj_set_flex_grow(bar, 1);
+        lv_obj_set_style_radius(bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(bar, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
+        lv_obj_set_style_anim_time(bar, kAnimMs, 0);
+        lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
+        coreBars[i] = bar;
+    }
 }
 
 void buildNetworkTab(lv_obj_t* tab) {
@@ -166,11 +203,26 @@ void buildNetworkTab(lv_obj_t* tab) {
     lv_label_set_text(txLabel, LV_SYMBOL_UPLOAD " --");
     lv_obj_set_pos(txLabel, 310, 0);
 
-    netChart = lv_chart_create(tab);
-    lv_obj_set_size(netChart, LV_PCT(100), 120);
-    lv_obj_set_pos(netChart, 0, 24);
+    // The clip box carries the chart's look; the chart itself is transparent.
+    netClip = lv_obj_create(tab);
+    lv_obj_set_size(netClip, LV_PCT(100), 120);
+    lv_obj_set_pos(netClip, 0, 24);
+    lv_obj_set_style_pad_all(netClip, 0, 0);
+    noScroll(netClip);
+    lv_obj_update_layout(netClip);
+    const lv_coord_t visibleW = lv_obj_get_content_width(netClip);
+    netStep = visibleW / (kNetHistory - 1);
+
+    netChart = lv_chart_create(netClip);
+    // One extra point, one step wider: chart spacing = width / points = netStep.
+    lv_obj_set_size(netChart, netStep * kNetHistory, LV_PCT(100));
+    lv_obj_set_style_bg_opa(netChart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(netChart, 0, 0);
+    lv_obj_set_style_radius(netChart, 0, 0);
+    lv_obj_set_style_pad_all(netChart, 0, 0);
+    lv_obj_set_style_pad_ver(netChart, 4, 0);
     lv_chart_set_type(netChart, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(netChart, kNetHistory);
+    lv_chart_set_point_count(netChart, kNetHistory + 1);
     lv_chart_set_range(netChart, LV_CHART_AXIS_PRIMARY_Y, 0, kNetChartMax);
     lv_chart_set_div_line_count(netChart, 3, 0);
     lv_obj_set_style_size(netChart, 0, LV_PART_INDICATOR);  // hide point markers
@@ -178,6 +230,13 @@ void buildNetworkTab(lv_obj_t* tab) {
     txSeries = lv_chart_add_series(netChart, kTxColor, LV_CHART_AXIS_PRIMARY_Y);
     lv_chart_set_ext_y_array(netChart, rxSeries, rxPoints);
     lv_chart_set_ext_y_array(netChart, txSeries, txPoints);
+
+    // Top-of-chart scale; the graph is normalised to it.
+    netPeakLabel = lv_label_create(netClip);
+    lv_obj_set_style_text_font(netPeakLabel, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_opa(netPeakLabel, LV_OPA_70, 0);
+    lv_label_set_text(netPeakLabel, "");
+    lv_obj_align(netPeakLabel, LV_ALIGN_TOP_RIGHT, -4, 2);
 
     // Disks: two per row under the chart.
     for (size_t i = 0; i < kMaxDisks; i++) {
@@ -252,23 +311,71 @@ void buildOverlays() {
     lv_timer_pause(toastTimer);
 }
 
-void pushNetHistory(float rx, float tx) {
-    memmove(rxHist, rxHist + 1, (kNetHistory - 1) * sizeof(float));
-    memmove(txHist, txHist + 1, (kNetHistory - 1) * sizeof(float));
-    rxHist[kNetHistory - 1] = rx;
-    txHist[kNetHistory - 1] = tx;
+void renormaliseNet() {
+    const float scale = netScale > 1.0f ? netScale : 1.0f;
+    for (size_t i = 0; i <= kNetHistory; i++) {
+        const float rx = rxHist[i] / scale, tx = txHist[i] / scale;
+        rxPoints[i] = static_cast<lv_coord_t>((rx > 1.0f ? 1.0f : rx) * kNetChartMax);
+        txPoints[i] = static_cast<lv_coord_t>((tx > 1.0f ? 1.0f : tx) * kNetChartMax);
+    }
+    lv_chart_refresh(netChart);
+}
 
-    // lv_coord_t is 16-bit, so normalise to the current peak instead of plotting raw rates.
+// v: 0..1024 progress from netScaleFrom to netScaleTo.
+void netScaleExec(void*, int32_t v) {
+    netScale = netScaleFrom + (netScaleTo - netScaleFrom) * (v / 1024.0f);
+    renormaliseNet();
+}
+
+void netScrollExec(void* chart, int32_t x) { lv_obj_set_x(static_cast<lv_obj_t*>(chart), x); }
+
+void pushNetHistory(float rx, float tx) {
+    memmove(rxHist, rxHist + 1, kNetHistory * sizeof(float));
+    memmove(txHist, txHist + 1, kNetHistory * sizeof(float));
+    rxHist[kNetHistory] = rx;
+    txHist[kNetHistory] = tx;
+
+    // Scroll: the data just moved left one point, so jump the chart back to x=0
+    // (which looks identical) and slide it one step over the next interval.
+    const uint32_t now = lv_tick_get();
+    uint32_t interval = lastStatsMs ? now - lastStatsMs : 1000;
+    lastStatsMs = now;
+    if (interval < 200) interval = 200;
+    if (interval > 3000) interval = 3000;
+
+    lv_anim_t scroll;
+    lv_anim_init(&scroll);
+    lv_anim_set_var(&scroll, netChart);
+    lv_anim_set_exec_cb(&scroll, netScrollExec);
+    lv_anim_set_values(&scroll, 0, -netStep);
+    lv_anim_set_time(&scroll, interval);
+    lv_anim_set_path_cb(&scroll, lv_anim_path_linear);
+    lv_anim_start(&scroll);
+
+    // Scale: lv_coord_t is 16-bit, so plot relative to the peak in view, and
+    // ease toward a new peak instead of snapping.
     float peak = 1.0f;
-    for (size_t i = 0; i < kNetHistory; i++) {
+    for (size_t i = 0; i <= kNetHistory; i++) {
         if (rxHist[i] > peak) peak = rxHist[i];
         if (txHist[i] > peak) peak = txHist[i];
     }
-    for (size_t i = 0; i < kNetHistory; i++) {
-        rxPoints[i] = static_cast<lv_coord_t>(rxHist[i] / peak * kNetChartMax);
-        txPoints[i] = static_cast<lv_coord_t>(txHist[i] / peak * kNetChartMax);
+    char buf[16];
+    fmtBytes(static_cast<uint64_t>(peak), buf, sizeof buf);
+    lv_label_set_text_fmt(netPeakLabel, "%s/s", buf);
+
+    renormaliseNet();  // the new point, at the current scale
+    if (peak != netScaleTo) {
+        netScaleFrom = netScale;
+        netScaleTo = peak;
+        lv_anim_t scale;
+        lv_anim_init(&scale);
+        lv_anim_set_var(&scale, &netScale);
+        lv_anim_set_exec_cb(&scale, netScaleExec);
+        lv_anim_set_values(&scale, 0, 1024);
+        lv_anim_set_time(&scale, kAnimMs);
+        lv_anim_set_path_cb(&scale, lv_anim_path_ease_out);
+        lv_anim_start(&scale);
     }
-    lv_chart_refresh(netChart);
 }
 
 }  // namespace
@@ -279,14 +386,17 @@ void init() {
     buildNetworkTab(lv_tabview_add_tab(tabview, LV_SYMBOL_WIFI " Network"));
     buildControlsTab(lv_tabview_add_tab(tabview, LV_SYMBOL_KEYBOARD " Controls"));
     buildOverlays();
+#ifdef NERD_START_TAB
+    // Debug: open on a given tab (0 System, 1 Network, 2 Controls).
+    lv_tabview_set_act(tabview, NERD_START_TAB, LV_ANIM_OFF);
+#endif
 }
 
 void updateStats(const HostStats& s) {
     char a[16], b[16], buf[160];
 
     // CPU
-    lv_arc_set_value(cpuArc, static_cast<int16_t>(s.cpu.usage));
-    lv_label_set_text_fmt(cpuLabel, "%d%%", static_cast<int>(s.cpu.usage));
+    animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
     // stdlib snprintf: LVGL's built-in printf has no float support by default.
     // The built-in fonts are ASCII-only, so no degree sign.
     if (s.cpu.has_temp)
@@ -295,14 +405,13 @@ void updateStats(const HostStats& s) {
         snprintf(buf, sizeof buf, "CPU  %u MHz", static_cast<unsigned>(s.cpu.freq_mhz));
     lv_label_set_text(cpuInfoLabel, buf);
 
-    if (s.cpu.core_count > 0) {
-        const uint16_t points = s.cpu.core_count < 2 ? 2 : s.cpu.core_count;
-        lv_chart_set_point_count(coreChart, points);
-        for (uint16_t i = 0; i < points; i++) {
-            const float v = i < s.cpu.core_count ? s.cpu.cores[i] : 0.0f;
-            lv_chart_set_value_by_id(coreChart, coreSeries, i, static_cast<lv_coord_t>(v));
+    for (size_t i = 0; i < kMaxCores; i++) {
+        if (i < s.cpu.core_count) {
+            lv_obj_clear_flag(coreBars[i], LV_OBJ_FLAG_HIDDEN);
+            lv_bar_set_value(coreBars[i], static_cast<int32_t>(s.cpu.cores[i] + 0.5f), LV_ANIM_ON);
+        } else {
+            lv_obj_add_flag(coreBars[i], LV_OBJ_FLAG_HIDDEN);
         }
-        lv_chart_refresh(coreChart);
     }
 
     // Memory
