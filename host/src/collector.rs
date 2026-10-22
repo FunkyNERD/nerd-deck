@@ -9,6 +9,7 @@ use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate
 use crate::battery;
 use crate::gpu::Gpu;
 use crate::mounts;
+use crate::power_profile::PowerProfile;
 use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats, TopProcess};
 
 /// The device shows at most this many disks.
@@ -36,6 +37,7 @@ pub struct Collector {
     disk_io: HashMap<String, (u64, u64)>,
     /// None on PCs without a readable GPU, which get the busiest process instead.
     gpu: Option<Gpu>,
+    power_profile: PowerProfile,
 }
 
 impl Collector {
@@ -57,6 +59,7 @@ impl Collector {
             last_sample: Instant::now(),
             disk_io: read_diskstats(),
             gpu: Gpu::find(),
+            power_profile: PowerProfile::new(),
         }
     }
 
@@ -120,6 +123,7 @@ impl Collector {
             cores: cpus.iter().map(|c| c.cpu_usage()).collect(),
             freq_mhz: cpus.first().map(|c| c.frequency()).unwrap_or(0),
             temp: self.cpu_temp(),
+            profile: self.power_profile.current(),
         }
     }
 

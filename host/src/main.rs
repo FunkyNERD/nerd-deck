@@ -10,6 +10,7 @@ mod icons;
 mod images;
 mod mounts;
 mod notifications;
+mod power_profile;
 mod protocol;
 mod settings;
 mod tray;

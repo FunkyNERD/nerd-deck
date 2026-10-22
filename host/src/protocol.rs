@@ -141,6 +141,10 @@ pub struct CpuStats {
     /// Degrees Celsius, if a sensor was found.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temp: Option<f32>,
+    /// The power profile, such as "balanced" or "performance", when the PC
+    /// reports one. Added in firmware 0.8.0; older firmware ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 /// All values in bytes.

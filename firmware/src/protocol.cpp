@@ -49,6 +49,7 @@ void handleStats(JsonObjectConst o) {
         s.cpu.has_temp = true;
         s.cpu.temp = cpu["temp"].as<float>();
     }
+    strlcpy(s.cpu.profile, cpu["profile"] | "", sizeof s.cpu.profile);
 
     JsonObjectConst mem = o["mem"];
     s.mem.used = mem["used"] | uint64_t(0);

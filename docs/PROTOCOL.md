@@ -27,7 +27,8 @@ if nothing arrives for 3 s.
   "host": "workstation",
   "uptime": 86400,
   "load": [0.42, 0.51, 0.60],
-  "cpu":  {"usage": 12.5, "cores": [10.0, 15.0], "freq_mhz": 3400, "temp": 54.0},
+  "cpu":  {"usage": 12.5, "cores": [10.0, 15.0], "freq_mhz": 3400, "temp": 54.0,
+           "profile": "balanced"},
   "mem":  {"used": 8589934592, "total": 34359738368, "swap_used": 0, "swap_total": 8589934592},
   "net":  {"iface": "enp5s0", "rx_bps": 125000, "tx_bps": 4000},
   "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000, "removable": false,
@@ -43,6 +44,10 @@ Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
 (left out when no sensor is found). The device shows at most 32 cores and 4 disks;
 `removable` marks a USB drive or SD card (protocol v5; false when left out), and
 `read_bps` / `write_bps` are its disk's activity (v6).
+`cpu.profile` is the power profile, as power-profiles-daemon names it
+("power-saver", "balanced", "performance") or else the ACPI platform profile
+("quiet", "low-power", ...); left out when the host reports none. Added in
+firmware 0.8.0 without a protocol change; older firmware ignores it.
 `gpu` (v6) is the discrete GPU, when the host can read one: `usage` percent,
 `temp`, and VRAM in bytes. A powered-down GPU (laptops with switchable
 graphics) is just `{"asleep": true}`, since reading it would wake it. Without

@@ -15,6 +15,7 @@ struct HostStats {
         uint32_t freq_mhz;
         bool has_temp;
         float temp;
+        char profile[24];  // power profile, e.g. "balanced"; empty if unknown
     } cpu;
 
     struct {

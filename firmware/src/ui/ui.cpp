@@ -92,6 +92,7 @@ lv_obj_t* cpuLabel;
 // neither shifts as the other changes width.
 lv_obj_t* cpuFreqLabel;
 lv_obj_t* cpuTempLabel;
+lv_obj_t* cpuProfileLabel;
 lv_obj_t* coreBars[kMaxCores];
 lv_obj_t* loadLabel;
 lv_obj_t* memBar;
@@ -517,6 +518,19 @@ void buildHeader() {
     batteryLabel = makeLabel(batteryBox, &lv_font_montserrat_12, kText, "");
 }
 
+// "power-saver" -> "Power saver", "balanced-performance" -> "Balanced
+// performance": dashes to spaces, first letter capitalised.
+void setProfile(const char* profile) {
+    char text[sizeof HostStats::cpu.profile];
+    strlcpy(text, profile, sizeof text);
+    for (char* c = text; *c; c++)
+        if (*c == '-' || *c == '_') *c = ' ';
+    if (text[0] >= 'a' && text[0] <= 'z') text[0] -= 'a' - 'A';
+    if (strcmp(lv_label_get_text(cpuProfileLabel), text) == 0) return;
+    lv_label_set_text(cpuProfileLabel, text);
+    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, 0);
+}
+
 void buildSystemTab(lv_obj_t* tab) {
     noScroll(tab);
 
@@ -543,6 +557,10 @@ void buildSystemTab(lv_obj_t* tab) {
     cpuLabel = makeLabel(cpuArc, &lv_font_montserrat_28, kText, "--%");
     lv_obj_align(cpuLabel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_align(makeCaption(cpuArc, "CPU"), LV_ALIGN_CENTER, 0, 18);
+
+    // The power profile, in the gap at the bottom of the gauge.
+    cpuProfileLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextFaint, "");
+    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     cpuFreqLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
     lv_obj_align(cpuFreqLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
@@ -1588,6 +1606,7 @@ void updateStats(const HostStats& s) {
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
     // setTextf: LVGL's built-in printf has no float support by default.
     setTextf(cpuFreqLabel, "%.1f GHz", s.cpu.freq_mhz / 1000.0);
+    setProfile(s.cpu.profile);
     // The built-in fonts are ASCII-only, so no degree sign.
     if (s.cpu.has_temp) {
         setTextf(cpuTempLabel, "%.0f C", static_cast<double>(s.cpu.temp));
