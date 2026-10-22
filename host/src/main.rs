@@ -471,6 +471,8 @@ fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
         brightness: d.brightness,
         dim_after: d.dim_after * 60,
         off_after: d.off_after * 60,
+        temp_warm: d.temp_warm,
+        temp_hot: d.temp_hot,
     })
 }
 

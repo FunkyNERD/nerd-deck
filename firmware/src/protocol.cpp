@@ -171,6 +171,11 @@ void handleDisplay(JsonObjectConst o) {
     if (o["brightness"].is<int>()) d.brightness = constrain(o["brightness"].as<int>(), 5, 100);
     if (o["dim_after"].is<uint32_t>()) d.dimAfterS = o["dim_after"].as<uint32_t>();
     if (o["off_after"].is<uint32_t>()) d.offAfterS = o["off_after"].as<uint32_t>();
+    const int warm = o["temp_warm"] | d.tempWarm, hot = o["temp_hot"] | d.tempHot;
+    if (warm < hot && warm > 0 && hot <= 150) {
+        d.tempWarm = static_cast<uint8_t>(warm);
+        d.tempHot = static_cast<uint8_t>(hot);
+    }
     save(d);
     ui::applyDisplay(d);
 }

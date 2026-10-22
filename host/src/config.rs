@@ -68,6 +68,9 @@ pub struct DisplayConfig {
     pub dim_after: u32,
     /// Minutes on the waiting screen before the screen turns off; 0 never.
     pub off_after: u32,
+    /// °C from which the CPU temperature shows orange, and red.
+    pub temp_warm: u8,
+    pub temp_hot: u8,
 }
 
 impl Default for DisplayConfig {
@@ -78,6 +81,8 @@ impl Default for DisplayConfig {
             tabs: Vec::new(),
             dim_after: 0,
             off_after: 0,
+            temp_warm: 70,
+            temp_hot: 85,
         }
     }
 }
@@ -106,6 +111,16 @@ impl DisplayConfig {
             "display.start {:?} isn't \"first\" or a tab: {}",
             self.start,
             TABS.join(", ")
+        );
+        ensure!(
+            (30..=120).contains(&self.temp_warm) && (30..=120).contains(&self.temp_hot),
+            "display.temp_warm and temp_hot must be 30-120 °C"
+        );
+        ensure!(
+            self.temp_warm < self.temp_hot,
+            "display.temp_warm ({}) must be below temp_hot ({})",
+            self.temp_warm,
+            self.temp_hot
         );
         let mut seen = std::collections::HashSet::new();
         for t in &self.tabs {
@@ -370,6 +385,8 @@ mod tests {
         assert!(parse("[display]\nstart = 'nope'").is_err());
         assert!(parse("[display]\nstart = 'battery'").is_ok());
         assert!(parse("[display]\nbrightness = 2").is_err());
+        assert!(parse("[display]\ntemp_warm = 90\ntemp_hot = 80").is_err());
+        assert!(parse("[display]\ntemp_warm = 60\ntemp_hot = 80").is_ok());
     }
 
     #[test]

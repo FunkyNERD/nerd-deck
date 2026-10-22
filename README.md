@@ -150,7 +150,8 @@ icon) opens a window for everything in the config:
 
 - **Device:** the connected deck, its port, serial number, firmware and
   protocol, and display settings kept on the deck: brightness, the tab it opens
-  on, dimming when idle, and turning off when the PC is away.
+  on, dimming when idle, turning off when the PC is away, and the temperatures
+  at which the CPU's turns orange and red.
 - **Buttons:** the Controls tab as a grid. Pick a button to change its label,
   its text colour (presets or any hex colour), its icon (the deck's own
   symbols, searchable), an image from a file, and what it does: a ready-made

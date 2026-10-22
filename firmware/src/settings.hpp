@@ -18,6 +18,7 @@ struct Display {
     uint8_t brightness;       // percent
     uint32_t dimAfterS;       // 0 = never
     uint32_t offAfterS;       // on the waiting screen; 0 = never
+    uint8_t tempWarm, tempHot;  // °C: the CPU temperature shows orange, then red
 };
 
 // The tab named `id`, or -1.

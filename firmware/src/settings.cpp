@@ -10,7 +10,7 @@ namespace {
 constexpr const char* kNamespace = "nerd-deck";
 constexpr const char* kKey = "display";
 // Bump when Display's layout changes; a stored copy of another layout is ignored.
-constexpr uint8_t kLayout = 2;
+constexpr uint8_t kLayout = 3;
 
 struct Stored {
     uint8_t layout;
@@ -24,6 +24,8 @@ Display defaults() {
     d.brightness = 80;
     d.dimAfterS = 0;
     d.offAfterS = 0;
+    d.tempWarm = 70;
+    d.tempHot = 85;
     return d;
 }
 
@@ -34,7 +36,8 @@ bool valid(const Display& d) {
         if (t >= kTabCount || seen[t]) return false;
         seen[t] = true;
     }
-    return d.start >= kStartFirst && d.start < kTabCount && d.brightness >= 5 && d.brightness <= 100;
+    return d.start >= kStartFirst && d.start < kTabCount && d.brightness >= 5 && d.brightness <= 100 &&
+           d.tempWarm < d.tempHot;
 }
 
 }  // namespace

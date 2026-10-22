@@ -77,6 +77,9 @@ uint32_t dimAfterMs = 0;  // 0 = never
 uint32_t offAfterMs = 0;  // on the waiting screen; 0 = never
 uint8_t litPercent = 0xFF;  // what the backlight is at now
 lv_obj_t* wakeCatcher;     // takes the tap that wakes a dimmed screen
+
+// °C from which the CPU temperature shows orange, and red.
+uint8_t tempWarm = 70, tempHot = 85;
 lv_obj_t* batteryBox;
 lv_obj_t* batteryBolt;
 lv_obj_t* batteryFill;
@@ -85,7 +88,10 @@ lv_obj_t* batteryLabel;
 // System tab
 lv_obj_t* cpuArc;
 lv_obj_t* cpuLabel;
-lv_obj_t* cpuInfoLabel;
+// Under the gauge: the clock on the left, the temperature on the right, so
+// neither shifts as the other changes width.
+lv_obj_t* cpuFreqLabel;
+lv_obj_t* cpuTempLabel;
 lv_obj_t* coreBars[kMaxCores];
 lv_obj_t* loadLabel;
 lv_obj_t* memBar;
@@ -529,8 +535,10 @@ void buildSystemTab(lv_obj_t* tab) {
     lv_obj_align(cpuLabel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_align(makeCaption(cpuArc, "CPU"), LV_ALIGN_CENTER, 0, 18);
 
-    cpuInfoLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
-    lv_obj_align(cpuInfoLabel, LV_ALIGN_BOTTOM_MID, 0, 0);
+    cpuFreqLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
+    lv_obj_align(cpuFreqLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    cpuTempLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
+    lv_obj_align(cpuTempLabel, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
     // Right column: memory, swap, host and uptime.
     const lv_coord_t colX = 150 + kGap, colW = 464 - colX;
@@ -1530,6 +1538,8 @@ void applyDisplay(const settings::Display& d) {
     brightness = d.brightness;
     dimAfterMs = d.dimAfterS * 1000;
     offAfterMs = d.offAfterS * 1000;
+    tempWarm = d.tempWarm;
+    tempHot = d.tempHot;
     powerTick(nullptr);
 }
 
@@ -1541,13 +1551,16 @@ void updateStats(const HostStats& s) {
 
     // CPU
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
-    // stdlib snprintf: LVGL's built-in printf has no float support by default.
+    // setTextf: LVGL's built-in printf has no float support by default.
+    setTextf(cpuFreqLabel, "%.1f GHz", s.cpu.freq_mhz / 1000.0);
     // The built-in fonts are ASCII-only, so no degree sign.
-    if (s.cpu.has_temp)
-        snprintf(buf, sizeof buf, "%.1f GHz  " LV_SYMBOL_BULLET "  %.0f C", s.cpu.freq_mhz / 1000.0, s.cpu.temp);
-    else
-        snprintf(buf, sizeof buf, "%.1f GHz", s.cpu.freq_mhz / 1000.0);
-    lv_label_set_text(cpuInfoLabel, buf);
+    if (s.cpu.has_temp) {
+        setTextf(cpuTempLabel, "%.0f C", static_cast<double>(s.cpu.temp));
+        const uint32_t color = s.cpu.temp >= tempHot ? kRed : s.cpu.temp >= tempWarm ? kOrange : kTextDim;
+        lv_obj_set_style_text_color(cpuTempLabel, lv_color_hex(color), 0);
+    } else {
+        lv_label_set_text(cpuTempLabel, "");
+    }
 
     for (size_t i = 0; i < kMaxCores; i++) {
         if (i < s.cpu.core_count) {

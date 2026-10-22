@@ -549,6 +549,8 @@ impl State {
         let (offs, index) = minutes_choices(&OFF_AFTER, d.off_after);
         b.set_off_options(ModelRc::new(VecModel::from(offs)));
         b.set_off_index(index);
+        b.set_temp_warm(d.temp_warm.into());
+        b.set_temp_hot(d.temp_hot.into());
 
         let opens = if d.start == "first" { order[0] } else { d.start.as_str() };
         let rows: Vec<TabRow> = order
@@ -1297,6 +1299,26 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         st.set("display", "off_after", *minutes as i64);
         st.save(&ui);
     });
+    {
+        // Each click of a number box sends one; save once they settle.
+        let set_temp = |key: &'static str| {
+            let ui_weak = ui.as_weak();
+            let state = state.clone();
+            move |v: i32| {
+                let Some(ui) = ui_weak.upgrade() else { return };
+                let mut st = state.borrow_mut();
+                let b = ui.global::<Backend>();
+                // The window's values, which run ahead of the saved config.
+                let (warm, hot) = (b.get_temp_warm(), b.get_temp_hot());
+                let v = if key == "temp_warm" { v.clamp(30, hot - 1) } else { v.clamp(warm + 1, 120) };
+                st.set("display", key, v as i64);
+                if key == "temp_warm" { b.set_temp_warm(v) } else { b.set_temp_hot(v) }
+                st.save_later(&ui, &state);
+            }
+        };
+        b.on_set_temp_warm(set_temp("temp_warm"));
+        b.on_set_temp_hot(set_temp("temp_hot"));
+    }
     on!(on_move_tab, |ui, st, index, delta| {
         let mut order: Vec<String> = st.cfg.display.tab_order().iter().map(|t| (*t).to_owned()).collect();
         let (from, to) = (index as usize, (index + delta) as usize);

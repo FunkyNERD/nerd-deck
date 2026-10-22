@@ -124,7 +124,7 @@ showing. The host sends ASCII only, since the device's fonts have nothing else.
 Settings the device keeps in flash, so they apply from power-on, before the host
 connects. Sent after the device's `hello` and whenever they change. Added in v6.
 ```json
-{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600}
+{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85}
 ```
 - `tabs`: the tab order, by `system`, `network`, `storage`, `battery` and
   `controls`. The pills in the header and swiping both follow it. Tabs left out
@@ -139,6 +139,8 @@ connects. Sent after the device's `hello` and whenever they change. Added in v6.
 - `off_after`: seconds on the waiting screen (the host away) before the
   backlight turns off; 0 never does. A touch, a notification or the host coming
   back wakes it.
+- `temp_warm`, `temp_hot`: °C from which the System tab shows the CPU
+  temperature orange, and red. `temp_warm` must be below `temp_hot`.
 
 Fields left out keep the device's stored values.
 

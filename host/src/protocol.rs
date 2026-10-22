@@ -50,6 +50,9 @@ pub enum HostMsg {
         dim_after: u32,
         /// Seconds on the waiting screen before the screen turns off; 0 never.
         off_after: u32,
+        /// °C from which the CPU temperature shows orange, and red.
+        temp_warm: u8,
+        temp_hot: u8,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.

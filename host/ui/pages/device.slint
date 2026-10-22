@@ -1,4 +1,4 @@
-import { Slider, ComboBox } from "std-widgets.slint";
+import { Slider, ComboBox, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Backend } from "../backend.slint";
 import { Card, SectionTitle, SettingRow, Toggle, Segmented, Pill } from "../widgets.slint";
@@ -230,6 +230,36 @@ export component DevicePage inherits VerticalLayout {
                     model: Backend.dim-options;
                     current-index <=> Backend.dim-index;
                     selected => { Backend.set-dim(self.current-index); }
+                }
+            }
+            SettingRow {
+                title: "CPU temperature";
+                subtitle: "On the System tab, the temperature turns orange, then red";
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle { width: 8px; height: 8px; y: (parent.height - 8px) / 2; border-radius: 4px; background: Theme.orange; }
+                    Text { text: "from"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
+                    SpinBox {
+                        width: 96px;
+                        minimum: 30;
+                        maximum: Backend.temp-hot - 1;
+                        value: Backend.temp-warm;
+                        accessible-label: "Orange from, degrees Celsius";
+                        edited(v) => { Backend.set-temp-warm(v); }
+                    }
+                    Text { text: "°C"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
+                    Rectangle { width: 8px; }
+                    Rectangle { width: 8px; height: 8px; y: (parent.height - 8px) / 2; border-radius: 4px; background: Theme.red; }
+                    Text { text: "from"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
+                    SpinBox {
+                        width: 96px;
+                        minimum: Backend.temp-warm + 1;
+                        maximum: 120;
+                        value: Backend.temp-hot;
+                        accessible-label: "Red from, degrees Celsius";
+                        edited(v) => { Backend.set-temp-hot(v); }
+                    }
+                    Text { text: "°C"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
                 }
             }
             SettingRow {

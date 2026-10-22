@@ -135,6 +135,11 @@ export global Backend {
     callback set-start(int);
     callback set-dim(int);
     callback set-off(int);
+    // °C from which the deck shows the CPU temperature orange, and red.
+    in property <int> temp-warm;
+    in property <int> temp-hot;
+    callback set-temp-warm(int);
+    callback set-temp-hot(int);
     in property <[TabRow]> tabs;
     callback move-tab(int, int);
     callback reset-tabs();
