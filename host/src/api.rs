@@ -31,8 +31,18 @@ pub struct Status {
     pub connected: bool,
     /// Serial port of the connected deck; empty when not connected.
     pub port: String,
+    /// The deck's USB serial number (its chip's MAC); empty when not connected.
+    pub serial: String,
     /// The deck's firmware version; empty until it says hello.
     pub firmware: String,
+    /// The board the deck's firmware is built for, and its protocol version;
+    /// empty and 0 until it says hello.
+    pub board: String,
+    pub proto: u32,
+    /// The firmware this host bundles; empty if none.
+    pub bundled: String,
+    /// The bundled firmware is being installed on the deck.
+    pub flashing: bool,
     /// This host's version.
     pub version: String,
     /// A newer nerd-deck release, if the update check found one.
@@ -49,6 +59,8 @@ pub enum Command {
     Reload(Reply),
     /// Show a sample notification on the deck, whatever the filters say.
     TestNotification { critical: bool, reply: Reply },
+    /// Install the bundled firmware on the deck, whatever it runs now.
+    ReinstallFirmware(Reply),
 }
 
 /// The service's side: holds the status and tells clients when it changes.
@@ -126,6 +138,11 @@ impl Api {
         self.call(|reply| Command::TestNotification { critical, reply })
     }
 
+    /// Starts the install and returns; `Status.flashing` follows it.
+    fn reinstall_firmware(&self) -> fdo::Result<()> {
+        self.call(Command::ReinstallFirmware)
+    }
+
     /// Emitted when anything in `Status` changes.
     #[zbus(signal)]
     async fn status_changed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
@@ -141,6 +158,7 @@ pub trait NerdDeck {
     fn status(&self) -> zbus::Result<Status>;
     fn reload(&self) -> zbus::Result<()>;
     fn test_notification(&self, critical: bool) -> zbus::Result<()>;
+    fn reinstall_firmware(&self) -> zbus::Result<()>;
     #[zbus(signal)]
     fn status_changed(&self) -> zbus::Result<()>;
 }

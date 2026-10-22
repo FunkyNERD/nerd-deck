@@ -8,13 +8,13 @@ use crate::icons;
 use crate::images::{self, ButtonImage};
 
 // Limits imposed by the firmware (firmware/src/config.hpp, stats.hpp).
-const MAX_BUTTONS: usize = 12;
-const MAX_ID_LEN: usize = 23;
-const MAX_LABEL_LEN: usize = 31;
+pub const MAX_BUTTONS: usize = 12;
+pub const MAX_ID_LEN: usize = 23;
+pub const MAX_LABEL_LEN: usize = 31;
 
 /// Written to the default location on first start, so there's a commented
 /// config to edit.
-const EXAMPLE: &str = include_str!("../config.example.toml");
+pub const EXAMPLE: &str = include_str!("../config.example.toml");
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -60,6 +60,8 @@ pub struct StatsConfig {
     /// Also report removable drives (USB disks, SD cards) while they're mounted,
     /// after `mounts`.
     pub removable: bool,
+    /// Show the battery in the device's header, on PCs that have one.
+    pub battery: bool,
 }
 
 impl Default for StatsConfig {
@@ -69,6 +71,7 @@ impl Default for StatsConfig {
             interface: None,
             mounts: vec!["/".into()],
             removable: true,
+            battery: true,
         }
     }
 }
@@ -100,11 +103,16 @@ pub struct NotificationsConfig {
     pub ignore: Vec<String>,
     /// Include the notification's body text, not just its title.
     pub body: bool,
+    /// Hold notifications back while the desktop's Do Not Disturb is on
+    /// (critical ones still show).
+    pub dnd: bool,
+    /// Leave out low-urgency notifications.
+    pub skip_low: bool,
 }
 
 impl Default for NotificationsConfig {
     fn default() -> Self {
-        Self { enabled: false, apps: vec![], ignore: vec![], body: true }
+        Self { enabled: false, apps: vec![], ignore: vec![], body: true, dnd: true, skip_low: true }
     }
 }
 
@@ -163,7 +171,7 @@ impl Config {
         Ok(cfg)
     }
 
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             self.buttons.len() <= MAX_BUTTONS,
             "{} buttons configured; the device shows at most {MAX_BUTTONS}",
@@ -228,7 +236,7 @@ fn write_example(path: &Path) -> std::io::Result<()> {
         .write_all(EXAMPLE.as_bytes())
 }
 
-fn resolve_path(config_dir: &Path, path: &Path) -> PathBuf {
+pub fn resolve_path(config_dir: &Path, path: &Path) -> PathBuf {
     if let (Ok(rest), Some(home)) = (path.strip_prefix("~"), dirs::home_dir()) {
         home.join(rest)
     } else {

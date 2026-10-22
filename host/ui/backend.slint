@@ -1,0 +1,118 @@
+// What the window shows and the requests it makes. settings.rs fills the
+// properties from the config and the service, and handles the callbacks.
+
+export struct DeckButton {
+    label: string,
+    id: string,
+    // 0 icon, 1 image, 2 text only.
+    kind: int,
+    icon: string,
+    glyph: string,
+    image: image,
+    has-image: bool,
+    image-path: string,
+    command: string,
+    empty: bool,
+}
+
+export struct IconChoice {
+    name: string,
+    glyph: string,
+}
+
+export struct DiskRow {
+    title: string,
+    mount: string,
+    usage: string,
+    percent: float,
+    on: bool,
+}
+
+export struct AppRow {
+    name: string,
+    app-id: string,
+    seen: string,
+    shown: bool,
+}
+
+export struct KnownDeck {
+    serial: string,
+    note: string,
+}
+
+export global Backend {
+    // From the service over D-Bus.
+    in property <bool> service-running;
+    in property <bool> connected;
+    in property <string> port;
+    in property <string> serial;
+    in property <string> firmware;
+    in property <string> board;
+    in property <int> proto;
+    in property <string> bundled;
+    in property <string> version;
+    in property <string> update;
+    in property <bool> flashing;
+
+    // A problem saving or applying the last change; empty when all is well.
+    in-out property <string> problem;
+    callback open-url(string);
+
+    // Buttons: one entry per slot on the deck, empty ones included.
+    in property <[DeckButton]> buttons;
+    in-out property <int> selected;
+    in property <[IconChoice]> icons;
+    in-out property <string> run-result;
+    in property <bool> run-ok;
+    in property <bool> running;
+    callback add-button(int);
+    callback remove-button(int);
+    callback move-button(int, int);
+    callback set-label(int, string);
+    callback set-command(int, string);
+    callback set-kind(int, int);
+    callback set-icon(int, string);
+    callback filter-icons(string);
+    callback choose-image(int);
+    callback run-command(int);
+
+    // Stats
+    in property <[string]> intervals;
+    in-out property <int> interval-index;
+    in property <[string]> interfaces;
+    in-out property <int> interface-index;
+    in property <[DiskRow]> disks;
+    in property <string> battery-note;
+    callback set-interval(int);
+    callback set-interface(int);
+    callback set-disk(int, bool);
+    callback move-disk(int, int);
+
+    // Switches, set through set-flag with these keys: "stats.removable",
+    // "stats.battery", "notifications.enabled", "notifications.all",
+    // "notifications.body", "notifications.dnd", "notifications.skip_low",
+    // "updates.firmware", "updates.check".
+    in property <bool> removable;
+    in property <bool> battery;
+    in property <bool> notify-enabled;
+    in property <bool> notify-all;
+    in property <bool> notify-body;
+    in property <bool> notify-dnd;
+    in property <bool> notify-skip-low;
+    in property <bool> auto-firmware;
+    in property <bool> check-updates;
+    callback set-flag(string, bool);
+
+    // Notifications
+    in property <[AppRow]> apps;
+    callback set-app-shown(int, bool);
+    callback test-notification(bool);
+
+    // Firmware
+    in property <[KnownDeck]> known;
+    callback reinstall-firmware();
+    callback forget-deck(int);
+
+    // About
+    in property <string> sysinfo;
+}

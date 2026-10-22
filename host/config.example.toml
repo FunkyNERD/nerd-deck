@@ -13,6 +13,7 @@ interval_ms = 1000
 # interface = "enp5s0"    # default: busiest non-loopback interface
 mounts = ["/", "/home"]   # the device shows up to 4
 removable = true          # also show USB drives / SD cards while mounted
+battery = true            # show the battery in the header, on PCs that have one
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device
@@ -23,6 +24,8 @@ enabled = false           # also show desktop notifications (new mail, chat, ...
 apps = []                 # only these apps, e.g. ["Geary", "Thunderbird"]; empty = all apps
 ignore = []               # never these apps, e.g. ["Spotify"]
 body = true               # false shows just the app and title, not the message text
+dnd = true                # hold them back while Do Not Disturb is on (critical ones still show)
+skip_low = true           # leave out low-urgency ones (connection changes and the like)
 # The log names each app as its notifications arrive:
 #   journalctl --user -u nerd-deck | grep notification
 

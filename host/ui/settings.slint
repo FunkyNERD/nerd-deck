@@ -1,0 +1,231 @@
+// The settings window (`nerd-deck --settings`). Layout follows the design in
+// the "nerd-deck settings" canvas: a sidebar of sections and one page each.
+
+import "fonts/fa-solid-900.ttf";
+import { ScrollView, Palette } from "std-widgets.slint";
+import { Theme, Glyphs } from "theme.slint";
+import { Backend } from "backend.slint";
+import { Glyph, PushButton } from "widgets.slint";
+import { DevicePage } from "pages/device.slint";
+import { ButtonsPage } from "pages/buttons.slint";
+import { StatsPage } from "pages/stats.slint";
+import { NotificationsPage } from "pages/notifications.slint";
+import { FirmwarePage } from "pages/firmware.slint";
+import { AboutPage } from "pages/about.slint";
+
+export { Backend }
+export { DeckButton, IconChoice, DiskRow, AppRow, KnownDeck } from "backend.slint";
+
+component NavItem inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+    height: 40px;
+    border-radius: 8px;
+    background: root.active ? Theme.selected : touch.has-hover ? Theme.card : transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-checked: root.active;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Glyph {
+            text: root.glyph;
+            width: 18px;
+            font-size: 14px;
+            color: root.active ? Theme.text : Theme.text-dim;
+        }
+        Text {
+            text: root.label;
+            font-size: 14px;
+            font-weight: 500;
+            color: root.active ? Theme.text : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+
+export component SettingsWindow inherits Window {
+    title: "nerd-deck settings";
+    icon: @image-url("../packaging/nerd-deck.svg");
+    preferred-width: 1040px;
+    preferred-height: 720px;
+    min-width: 900px;
+    min-height: 600px;
+    background: Theme.bg;
+    default-font-size: 14px;
+
+    in-out property <int> page;
+
+    // The standard widgets (fields, menus, Slint's credit) follow the window's dark look.
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    property <[string]> titles: ["Device", "Buttons", "Stats", "Notifications", "Firmware & updates", "About"];
+    property <[string]> glyphs: [Glyphs.desktop, Glyphs.grid, Glyphs.chart, Glyphs.bell, Glyphs.chip, Glyphs.info];
+
+    HorizontalLayout {
+        // Sidebar
+        Rectangle {
+            width: 220px;
+            background: Theme.sidebar;
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Theme.rule;
+            }
+            VerticalLayout {
+                padding: 12px;
+                padding-top: 16px;
+                spacing: 4px;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-bottom: 20px;
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 3px;
+                        VerticalLayout { alignment: end; Rectangle { width: 6px; height: 12px; border-radius: 2px; background: Theme.cyan; } }
+                        VerticalLayout { alignment: end; Rectangle { width: 6px; height: 22px; border-radius: 2px; background: Theme.green; } }
+                        VerticalLayout { alignment: end; Rectangle { width: 6px; height: 16px; border-radius: 2px; background: Theme.orange; } }
+                    }
+                    Text {
+                        text: "nerd-deck";
+                        font-size: 17px;
+                        font-weight: 700;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+                }
+                for title[i] in root.titles: NavItem {
+                    glyph: root.glyphs[i];
+                    label: title;
+                    active: i == root.page;
+                    clicked => { root.page = i; }
+                }
+                Rectangle { vertical-stretch: 1; }
+                Rectangle {
+                    border-radius: 10px;
+                    background: Theme.card;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 4px;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 4px;
+                                background: Backend.connected ? Theme.green : Backend.flashing ? Theme.cyan : Theme.muted;
+                            }
+                            Text {
+                                text: !Backend.service-running ? "Service not running"
+                                    : Backend.flashing ? "Updating firmware"
+                                    : Backend.connected ? "Deck connected" : "Waiting for the deck";
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: Theme.text;
+                            }
+                        }
+                        if Backend.connected: Text {
+                            text: Backend.port + (Backend.firmware == "" ? "" : " · fw " + Backend.firmware);
+                            font-size: 12px;
+                            font-family: Theme.mono;
+                            color: Theme.text-dim;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            // Header
+            Rectangle {
+                height: 56px;
+                HorizontalLayout {
+                    padding-left: 24px;
+                    padding-right: 20px;
+                    spacing: 12px;
+                    Text {
+                        text: root.titles[root.page];
+                        font-size: 17px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    if Backend.problem == "" && !Backend.service-running: Text {
+                        text: "The service isn't running; changes apply when it starts";
+                        font-size: 12px;
+                        color: Theme.text-faint;
+                        vertical-alignment: center;
+                    }
+                    if Backend.problem != "": HorizontalLayout {
+                        spacing: 8px;
+                        Glyph { text: Glyphs.warning; font-size: 12px; color: Theme.red-text; }
+                        Text {
+                            text: Backend.problem;
+                            font-size: 12px;
+                            color: Theme.red-text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            max-width: 420px;
+                        }
+                        PushButton {
+                            icon: Glyphs.cross;
+                            flat: true;
+                            height: 28px;
+                            accessible-label: "Dismiss";
+                            clicked => { Backend.problem = ""; }
+                        }
+                    }
+                }
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.rule;
+                }
+            }
+
+            // Pages scroll when the window is shorter than they are. The
+            // scroll view has to be told how tall its content is.
+            if root.page == 0: s0 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p0.preferred-height;
+                p0 := DevicePage { width: s0.visible-width; }
+            }
+            // The button editor fits the window and scrolls inside its panel.
+            if root.page == 1: ButtonsPage { vertical-stretch: 1; }
+            if root.page == 2: s2 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p2.preferred-height;
+                p2 := StatsPage { width: s2.visible-width; }
+            }
+            if root.page == 3: s3 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p3.preferred-height;
+                p3 := NotificationsPage { width: s3.visible-width; }
+            }
+            if root.page == 4: s4 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p4.preferred-height;
+                p4 := FirmwarePage { width: s4.visible-width; }
+            }
+            if root.page == 5: s5 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p5.preferred-height;
+                p5 := AboutPage { width: s5.visible-width; }
+            }
+        }
+    }
+}

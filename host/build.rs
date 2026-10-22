@@ -4,6 +4,8 @@
 //! `nerd-deck-firmware:<board>:<version>;` marker the firmware carries
 //! (firmware/src/protocol.cpp), so they always describe the image itself.
 //! Without the variable the host builds with no firmware and never flashes.
+//!
+//! Also compiles the settings window (ui/settings.slint).
 
 use std::path::PathBuf;
 use std::{env, fs};
@@ -13,6 +15,8 @@ const BOARD: &str = "wt32-sc01-plus";
 const MARKER: &[u8] = b"nerd-deck-firmware:";
 
 fn main() {
+    slint_build::compile("ui/settings.slint").expect("compiling the settings window");
+
     println!("cargo::rerun-if-env-changed=NERD_DECK_FIRMWARE");
 
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("firmware.bin");

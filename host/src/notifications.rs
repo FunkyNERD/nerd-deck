@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use zbus::blocking::{fdo::MonitoringProxy, Connection, MessageIterator};
@@ -48,6 +49,8 @@ pub struct Raw {
     summary: String,
     body: String,
     urgency: Urgency,
+    /// The desktop's Do Not Disturb was on when it arrived.
+    dnd: bool,
 }
 
 #[derive(Debug, Default, PartialEq, PartialOrd)]
@@ -59,8 +62,8 @@ enum Urgency {
 }
 
 /// Watch the session bus on a background thread. Notifications arrive on the
-/// returned channel, unfiltered except for Do Not Disturb; `filter` applies
-/// the config, so a reloaded config takes effect at once.
+/// returned channel unfiltered; `filter` applies the config, so a reloaded
+/// config takes effect at once.
 pub fn watch() -> Receiver<Raw> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || loop {
@@ -112,10 +115,8 @@ fn monitor(tx: &Sender<Raw>) -> Result<()> {
             }
         };
 
-        if raw.urgency != Urgency::Critical && do_not_disturb(&dnd) {
-            log::info!("notification from {:?} (Do Not Disturb)", raw.app);
-            continue;
-        }
+        let mut raw = raw;
+        raw.dnd = raw.urgency != Urgency::Critical && do_not_disturb(&dnd);
         if tx.send(raw).is_err() {
             return Ok(());
         }
@@ -148,7 +149,7 @@ fn from_fdo((app, _, _, summary, body, _, hints, _): FdoNotify) -> Raw {
         Some(Value::U8(2)) => Urgency::Critical,
         _ => Urgency::Normal,
     };
-    Raw { app, app_id: string(hints.get("desktop-entry")), summary, body, urgency }
+    Raw { app, app_id: string(hints.get("desktop-entry")), summary, body, urgency, dnd: false }
 }
 
 type GtkAddNotification = (
@@ -171,6 +172,7 @@ fn from_gtk((app_id, _, n): GtkAddNotification) -> Raw {
         summary: string(n.get("title")).unwrap_or_default(),
         body: string(n.get("body")).unwrap_or_default(),
         urgency,
+        dnd: false,
     }
 }
 
@@ -187,20 +189,101 @@ pub fn filter(cfg: &NotificationsConfig, n: Raw) -> Option<Notification> {
         log::info!("notification from {:?} (filtered out)", n.app);
         return None;
     }
+    if n.dnd && cfg.dnd {
+        log::info!("notification from {:?} (Do Not Disturb)", n.app);
+        return None;
+    }
     log::info!("notification from {:?}", n.app);
     Some(prepare(cfg, n))
 }
 
-/// The config's app filters. Low-urgency notifications (connection changes,
-/// background jobs and the like) are always left out, and so are the tray's
-/// own messages.
+/// The config's app filters, and `skip_low` for low-urgency notifications
+/// (connection changes, background jobs and the like). The tray's own
+/// messages are always left out.
 fn accepts(cfg: &NotificationsConfig, n: &Raw) -> bool {
-    if n.urgency == Urgency::Low || n.app == crate::tray::APP_NAME {
+    if (cfg.skip_low && n.urgency == Urgency::Low) || n.app == crate::tray::APP_NAME {
         return false;
     }
     let names = app_names(n);
     let listed = |list: &[String]| list.iter().any(|a| names.contains(&a.to_lowercase()));
     (cfg.apps.is_empty() || listed(&cfg.apps)) && !listed(&cfg.ignore)
+}
+
+/// Apps that have sent notifications, so the settings window can list them
+/// for filtering. Kept in the state directory as `name<TAB>app id<TAB>unix time`
+/// lines, newest first.
+pub struct SeenApps {
+    path: Option<PathBuf>,
+    apps: Vec<SeenApp>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeenApp {
+    pub name: String,
+    pub app_id: String,
+    /// Unix seconds.
+    pub last: u64,
+}
+
+impl SeenApps {
+    pub fn load() -> Self {
+        let path = dirs::state_dir().map(|d| d.join("nerd-deck").join("notification-apps"));
+        let text = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        Self { path, apps: parse_seen(&text) }
+    }
+
+    pub fn list(&self) -> &[SeenApp] {
+        &self.apps
+    }
+
+    /// Note an app, saving only when it's new or last seen over a minute ago.
+    pub fn record(&mut self, n: &Raw) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let app_id = n.app_id.clone().unwrap_or_default();
+        let fresh = match self.apps.iter().position(|a| a.name == n.app) {
+            Some(i) => {
+                let a = self.apps.remove(i);
+                let fresh = now.saturating_sub(a.last) >= 60 || a.app_id != app_id;
+                self.apps.insert(0, SeenApp { last: if fresh { now } else { a.last }, app_id, ..a });
+                fresh
+            }
+            None => {
+                self.apps.insert(0, SeenApp { name: n.app.clone(), app_id, last: now });
+                true
+            }
+        };
+        if fresh {
+            self.save();
+        }
+    }
+
+    fn save(&self) {
+        let Some(path) = &self.path else { return };
+        let text: String = self
+            .apps
+            .iter()
+            .map(|a| format!("{}\t{}\t{}\n", a.name.replace(['\t', '\n'], " "), a.app_id, a.last))
+            .collect();
+        let saved = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(path, text));
+        if let Err(e) = saved {
+            log::warn!("can't save {}: {e}", path.display());
+        }
+    }
+}
+
+fn parse_seen(text: &str) -> Vec<SeenApp> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let name = parts.next().filter(|n| !n.is_empty())?.to_owned();
+            let app_id = parts.next().unwrap_or_default().to_owned();
+            let last = parts.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+            Some(SeenApp { name, app_id, last })
+        })
+        .collect()
 }
 
 /// What a config entry can call an app by: its name, its desktop file or app
@@ -304,7 +387,7 @@ mod tests {
             enabled: true,
             apps: apps.iter().map(|s| s.to_string()).collect(),
             ignore: ignore.iter().map(|s| s.to_string()).collect(),
-            body: true,
+            ..Default::default()
         }
     }
 
@@ -324,6 +407,14 @@ mod tests {
 
         let low = Raw { urgency: Urgency::Low, ..raw("Geary", None) };
         assert!(!accepts(&cfg(&[], &[]), &low));
+    }
+
+    #[test]
+    fn parses_seen_apps() {
+        let apps = parse_seen("Geary\torg.gnome.Geary\t1700000000\n\nfoo\t\tx\n");
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].app_id, "org.gnome.Geary");
+        assert_eq!(apps[1], SeenApp { name: "foo".into(), app_id: String::new(), last: 0 });
     }
 
     #[test]

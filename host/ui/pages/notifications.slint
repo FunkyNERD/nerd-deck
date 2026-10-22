@@ -1,0 +1,203 @@
+import { Theme, Glyphs } from "../theme.slint";
+import { Backend } from "../backend.slint";
+import { Card, Glyph, SectionTitle, SettingRow, Toggle, Segmented, PushButton } from "../widgets.slint";
+
+// A small drawing of how each kind of notification looks on the deck.
+component Preview inherits Rectangle {
+    in property <bool> critical;
+    height: 130px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: root.critical ? #140A0C : Theme.sidebar;
+    clip: true;
+    if !root.critical: Rectangle {
+        background: Theme.sidebar.with-alpha(0.55);
+        Rectangle {
+            x: 10px;
+            y: 8px;
+            width: parent.width - 20px;
+            height: 58px;
+            border-radius: 9px;
+            background: Theme.card;
+            border-width: 1px;
+            border-color: #1D5A63;
+            Rectangle { x: 10px; y: 10px; width: 26px; height: 26px; border-radius: 7px; background: #12333A; }
+            Rectangle { x: 45px; y: 10px; width: 60px; height: 5px; border-radius: 3px; background: Theme.cyan; }
+            Rectangle { x: 45px; y: 20px; width: 120px; height: 8px; border-radius: 3px; background: Theme.text; }
+            Rectangle { x: 45px; y: 33px; width: parent.width - 60px; height: 5px; border-radius: 3px; background: Theme.muted; }
+            Rectangle { x: 45px; y: 43px; width: 90px; height: 5px; border-radius: 3px; background: Theme.muted; }
+        }
+    }
+    if root.critical: Rectangle {
+        Rectangle { x: 0; y: 0; height: 2px; background: Theme.red; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 7px;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 13px;
+                    background: #3A1C1F;
+                    border-width: 3px;
+                    border-color: Theme.red.with-alpha(0.3);
+                }
+            }
+            HorizontalLayout { alignment: center; Rectangle { width: 90px; height: 9px; border-radius: 3px; background: Theme.text; } }
+            HorizontalLayout { alignment: center; Rectangle { width: 130px; height: 5px; border-radius: 3px; background: Theme.muted; } }
+            HorizontalLayout {
+                alignment: center;
+                Rectangle { width: 64px; height: 14px; border-radius: 7px; border-width: 1px; border-color: Theme.red; }
+            }
+        }
+    }
+}
+
+export component NotificationsPage inherits VerticalLayout {
+    padding: 24px;
+    spacing: 24px;
+    alignment: start;
+
+    Card {
+        HorizontalLayout {
+            padding: 16px;
+            spacing: 14px;
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 10px;
+                background: #12333A;
+                Glyph { text: Glyphs.bell; color: Theme.cyan; font-size: 18px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text { text: "Show desktop notifications on the deck"; font-size: 15px; font-weight: 600; color: Theme.text; }
+                Text {
+                    text: "Anyone near your desk can read the display, so pick the apps you trust it with.";
+                    font-size: 12px;
+                    color: Theme.text-dim;
+                    wrap: word-wrap;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Toggle {
+                    label: "Show desktop notifications on the deck";
+                    checked: Backend.notify-enabled;
+                    toggled(on) => { Backend.set-flag("notifications.enabled", on); }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        SectionTitle {
+            title: "Apps";
+            subtitle: "An app shows up here once it has sent a notification.";
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: end;
+            Segmented {
+                options: ["Only apps I pick", "All apps"];
+                current: Backend.notify-all ? 1 : 0;
+                selected(i) => { Backend.set-flag("notifications.all", i == 1); }
+            }
+        }
+    }
+    Card {
+        opacity: Backend.notify-enabled ? 1 : 0.5;
+        VerticalLayout {
+            if Backend.apps.length == 0: Text {
+                text: "No notifications yet. Apps appear here as they send them.";
+                font-size: 13px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                height: 64px;
+                vertical-alignment: center;
+            }
+            for app[i] in Backend.apps: SettingRow {
+                title: app.name;
+                subtitle: (app.app-id == "" ? "" : app.app-id + " · ") + app.seen;
+                last: i == Backend.apps.length - 1;
+                Segmented {
+                    options: ["Show", "Hide"];
+                    current: app.shown ? 0 : 1;
+                    selected(choice) => { Backend.set-app-shown(i, choice == 0); }
+                }
+            }
+        }
+    }
+
+    SectionTitle { title: "What shows"; }
+    Card {
+        VerticalLayout {
+            SettingRow {
+                title: "Show the message text";
+                subtitle: "Off shows just the app and the title";
+                Toggle {
+                    label: "Show the message text";
+                    checked: Backend.notify-body;
+                    toggled(on) => { Backend.set-flag("notifications.body", on); }
+                }
+            }
+            SettingRow {
+                title: "Follow Do Not Disturb";
+                subtitle: "Hold notifications back while it's on. Critical ones still show.";
+                Toggle {
+                    label: "Follow Do Not Disturb";
+                    checked: Backend.notify-dnd;
+                    toggled(on) => { Backend.set-flag("notifications.dnd", on); }
+                }
+            }
+            SettingRow {
+                title: "Skip low-urgency notifications";
+                subtitle: "Connection changes, finished downloads and the like";
+                last: true;
+                Toggle {
+                    label: "Skip low-urgency notifications";
+                    checked: Backend.notify-skip-low;
+                    toggled(on) => { Backend.set-flag("notifications.skip_low", on); }
+                }
+            }
+        }
+    }
+
+    SectionTitle {
+        title: "Try it on the deck";
+        subtitle: Backend.connected ? "" : "Connect the deck to send a test.";
+    }
+    HorizontalLayout {
+        spacing: 16px;
+        for kind[i] in ["Normal", "Critical"]: Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 12px;
+                Preview { critical: i == 1; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Text { text: kind; font-size: 14px; font-weight: 600; color: Theme.text; }
+                        Text {
+                            text: i == 0 ? "Slides down for 8 seconds" : "Takes over until dismissed";
+                            font-size: 12px;
+                            color: Theme.text-dim;
+                        }
+                    }
+                    PushButton {
+                        text: "Send test";
+                        enabled: Backend.connected;
+                        clicked => { Backend.test-notification(i == 1); }
+                    }
+                }
+            }
+        }
+    }
+}

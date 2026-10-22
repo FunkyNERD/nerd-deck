@@ -1,0 +1,376 @@
+import { LineEdit, TextEdit, ScrollView } from "std-widgets.slint";
+import { Theme, Glyphs } from "../theme.slint";
+import { Backend, DeckButton } from "../backend.slint";
+import { Card, Glyph, Segmented, PushButton } from "../widgets.slint";
+
+// One slot of the deck's Controls tab, drawn the way the deck draws it.
+component ButtonTile inherits Rectangle {
+    in property <DeckButton> button;
+    in property <bool> selected;
+    callback clicked;
+    border-radius: 10px;
+    background: root.button.empty ? transparent : Theme.card;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.cyan : root.button.empty ? Theme.control-border : Theme.border;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.button.empty ? "Empty slot" : root.button.label;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+    VerticalLayout {
+        padding: 6px;
+        spacing: 6px;
+        alignment: center;
+        if root.button.empty: Glyph {
+            text: Glyphs.plus;
+            font-size: 14px;
+            color: Theme.muted;
+        }
+        if !root.button.empty && root.button.kind == 0: Glyph {
+            text: root.button.glyph;
+            font-size: 22px;
+        }
+        if !root.button.empty && root.button.kind == 1: HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.button.image;
+                width: 28px;
+                height: 28px;
+                image-fit: contain;
+            }
+        }
+        if !root.button.empty: Text {
+            text: root.button.label;
+            font-size: 12px;
+            font-weight: 500;
+            color: Theme.text;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component FieldLabel inherits Text {
+    font-size: 12px;
+    font-weight: 600;
+    color: Theme.text-dim;
+}
+
+component Inspector inherits Card {
+    property <int> sel: Backend.selected;
+    property <DeckButton> button: Backend.buttons[self.sel];
+
+    if root.button.empty: VerticalLayout {
+        padding: 24px;
+        spacing: 12px;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: Theme.control-border;
+                Glyph { text: Glyphs.plus; color: Theme.text-dim; }
+            }
+        }
+        Text {
+            text: "Empty slot";
+            font-size: 14px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            color: Theme.text;
+        }
+        Text {
+            text: "Add a button here to run a command on this PC from the deck.";
+            font-size: 13px;
+            color: Theme.text-dim;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: center;
+            PushButton {
+                text: "Add button";
+                primary: true;
+                clicked => { Backend.add-button(root.sel); }
+            }
+        }
+    }
+
+    if !root.button.empty: VerticalLayout {
+        // The text fields keep what's typed, so a new selection fills them in.
+        property <int> shown: root.sel;
+        changed shown => {
+            label-edit.text = root.button.label;
+            command-edit.text = root.button.command;
+        }
+        fields := ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            content-height: field-list.preferred-height;
+            field-list := VerticalLayout {
+                width: fields.visible-width;
+                padding: 16px;
+                spacing: 16px;
+                alignment: start;
+
+                VerticalLayout {
+                    spacing: 6px;
+                    FieldLabel { text: "Label"; }
+                    label-edit := LineEdit {
+                        text: root.button.label;
+                        accessible-label: "Label";
+                        edited(text) => { Backend.set-label(root.sel, text); }
+                    }
+                    Text {
+                        text: "ID  " + root.button.id;
+                        font-size: 12px;
+                        font-family: Theme.mono;
+                        color: Theme.text-faint;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 8px;
+                    FieldLabel { text: "Appearance"; }
+                    Segmented {
+                        options: ["Icon", "Image", "Text only"];
+                        current: root.button.kind;
+                        selected(i) => { Backend.set-kind(root.sel, i); }
+                    }
+                    if root.button.kind == 0: VerticalLayout {
+                        spacing: 8px;
+                        LineEdit {
+                            placeholder-text: "Search icons";
+                            accessible-label: "Search icons";
+                            edited(text) => { Backend.filter-icons(text); }
+                        }
+                        icon-scroll := ScrollView {
+                            height: 196px;
+                            property <length> tile: (self.visible-width - 5 * 6px) / 6;
+                            content-height: ceil(Backend.icons.length / 6) * (44px + 6px);
+                            for icon[i] in Backend.icons: Rectangle {
+                                x: mod(i, 6) * (icon-scroll.tile + 6px);
+                                y: floor(i / 6) * 50px;
+                                width: icon-scroll.tile;
+                                height: 44px;
+                                border-radius: 8px;
+                                background: icon.name == root.button.icon ? Theme.selected : (icon-touch.has-hover ? Theme.control : Theme.field);
+                                border-width: 1px;
+                                border-color: icon.name == root.button.icon ? Theme.cyan : Theme.border;
+                                accessible-role: AccessibleRole.button;
+                                accessible-label: icon.name;
+                                accessible-checked: icon.name == root.button.icon;
+                                accessible-action-default => { Backend.set-icon(root.sel, icon.name); }
+                                Glyph {
+                                    text: icon.glyph;
+                                    font-size: 17px;
+                                    color: icon.name == root.button.icon ? Theme.text : Theme.text-dim;
+                                }
+                                icon-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { Backend.set-icon(root.sel, icon.name); }
+                                }
+                            }
+                        }
+                    }
+                    if root.button.kind == 1: VerticalLayout {
+                        spacing: 10px;
+                        Rectangle {
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: Theme.control-border;
+                            background: Theme.field;
+                            HorizontalLayout {
+                                padding: 14px;
+                                spacing: 14px;
+                                Rectangle {
+                                    width: 64px;
+                                    height: 64px;
+                                    border-radius: 12px;
+                                    background: Theme.card;
+                                    if root.button.has-image: Image {
+                                        source: root.button.image;
+                                        width: 56px;
+                                        height: 56px;
+                                        image-fit: contain;
+                                    }
+                                    if !root.button.has-image: Glyph { text: Glyphs.image; font-size: 22px; color: Theme.muted; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 4px;
+                                    Text {
+                                        text: root.button.image-path == "" ? "No image chosen" : root.button.image-path;
+                                        font-size: 13px;
+                                        font-family: root.button.image-path == "" ? "" : Theme.mono;
+                                        color: Theme.text;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: "PNG, JPEG or BMP";
+                                        font-size: 12px;
+                                        color: Theme.text-faint;
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            PushButton {
+                                text: "Choose image…";
+                                clicked => { Backend.choose-image(root.sel); }
+                            }
+                            Rectangle { }
+                            if root.button.has-image: Text {
+                                text: "On the deck";
+                                font-size: 12px;
+                                color: Theme.text-faint;
+                                vertical-alignment: center;
+                            }
+                            if root.button.has-image: Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                Image {
+                                    source: root.button.image;
+                                    width: 40px;
+                                    height: 40px;
+                                    image-fit: contain;
+                                }
+                            }
+                        }
+                        Text {
+                            text: "Scaled to fit 40 × 40 on the deck, keeping transparency.";
+                            font-size: 12px;
+                            color: Theme.text-faint;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 6px;
+                    FieldLabel { text: "Command"; }
+                    command-edit := TextEdit {
+                        height: 84px;
+                        text: root.button.command;
+                        font-size: 13px;
+                        accessible-label: "Command";
+                        edited(text) => { Backend.set-command(root.sel, text); }
+                    }
+                    if Backend.run-result != "": Text {
+                        text: Backend.run-result;
+                        font-size: 12px;
+                        color: Backend.run-ok ? Theme.green-text : Theme.red-text;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        HorizontalLayout {
+            padding: 10px;
+            padding-left: 8px;
+            spacing: 4px;
+            PushButton {
+                icon: Glyphs.left;
+                flat: true;
+                enabled: root.sel > 0;
+                accessible-label: "Move left";
+                clicked => { Backend.move-button(root.sel, -1); }
+            }
+            PushButton {
+                icon: Glyphs.right;
+                flat: true;
+                enabled: root.sel < Backend.buttons.length - 1 && !Backend.buttons[root.sel + 1].empty;
+                accessible-label: "Move right";
+                clicked => { Backend.move-button(root.sel, 1); }
+            }
+            PushButton {
+                text: Backend.running ? "Running…" : "Run now";
+                icon: Glyphs.play;
+                enabled: !Backend.running;
+                clicked => { Backend.run-command(root.sel); }
+            }
+            Rectangle { }
+            PushButton {
+                text: "Remove";
+                icon: Glyphs.trash;
+                danger: true;
+                clicked => { Backend.remove-button(root.sel); }
+            }
+        }
+    }
+}
+
+export component ButtonsPage inherits HorizontalLayout {
+    padding: 24px;
+    spacing: 24px;
+
+    VerticalLayout {
+        spacing: 12px;
+        horizontal-stretch: 1;
+        alignment: start;
+        // The deck: a bezel round its 480 × 320 screen, at 85%.
+        Rectangle {
+            height: 292px;
+            border-radius: 16px;
+            background: #05070A;
+            border-width: 1px;
+            border-color: Theme.border;
+            screen := Rectangle {
+                x: 10px;
+                y: 10px;
+                width: parent.width - 20px;
+                height: parent.height - 20px;
+                border-radius: 6px;
+                background: Theme.sidebar;
+                property <length> gap: 8px;
+                property <length> tile-w: (self.width - 2 * self.gap - 3 * self.gap) / 4;
+                property <length> tile-h: (self.height - 2 * self.gap - 2 * self.gap) / 3;
+                for b[i] in Backend.buttons: ButtonTile {
+                    x: screen.gap + mod(i, 4) * (screen.tile-w + screen.gap);
+                    y: screen.gap + floor(i / 4) * (screen.tile-h + screen.gap);
+                    width: screen.tile-w;
+                    height: screen.tile-h;
+                    button: b;
+                    selected: i == Backend.selected;
+                    clicked => {
+                        Backend.selected = i;
+                        Backend.run-result = "";
+                    }
+                }
+            }
+        }
+        Text {
+            text: "The deck shows buttons in this order, left to right. Use the arrows to move one.";
+            font-size: 12px;
+            color: Theme.text-dim;
+            wrap: word-wrap;
+        }
+        Card {
+            HorizontalLayout {
+                padding: 14px;
+                padding-left: 16px;
+                spacing: 12px;
+                Glyph { text: Glyphs.info; color: Theme.cyan; font-size: 15px; }
+                Text {
+                    text: "Commands run on this PC with sh -c, as you. The deck only sends a button's ID, never a command.";
+                    font-size: 13px;
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    Inspector {
+        width: 320px;
+    }
+}

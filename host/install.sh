@@ -15,6 +15,8 @@ BIN_DIR="$HOME/.local/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nerd-deck"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
 UDEV_RULE=/etc/udev/rules.d/99-nerd-deck.rules
 SERVICE=nerd-deck.service
 TRAY=nerd-deck-tray.desktop
@@ -62,8 +64,8 @@ uninstall() {
     pkill -u "$USER" -f "^[^ ]*nerd-deck --tray" || true
     rm -f "$AUTOSTART_DIR/$TRAY"
 
-    info "Removing $BIN_DIR/nerd-deck"
-    rm -f "$BIN_DIR/nerd-deck"
+    info "Removing $BIN_DIR/nerd-deck and its menu entry"
+    rm -f "$BIN_DIR/nerd-deck" "$APPS_DIR/nerd-deck.desktop" "$ICON_DIR/nerd-deck.svg"
 
     if [[ -e $UDEV_RULE ]]; then
         info "Removing $UDEV_RULE (needs sudo)"
@@ -77,8 +79,8 @@ uninstall() {
 check_deps() {
     command -v cargo >/dev/null ||
         die "cargo not found. Install Rust: https://rustup.rs (then: source ~/.cargo/env)"
-    command -v pkg-config >/dev/null && pkg-config --exists libudev ||
-        die "libudev headers not found. Install them: sudo apt install build-essential pkg-config libudev-dev"
+    command -v pkg-config >/dev/null && pkg-config --exists libudev fontconfig ||
+        die "libudev or fontconfig headers not found. Install them: sudo apt install build-essential pkg-config libudev-dev libfontconfig1-dev"
 }
 
 # Builds the device firmware so the host bundles it and keeps the device up to
@@ -101,6 +103,11 @@ install_binary() {
 
     info "Installing $BIN_DIR/nerd-deck"
     install -Dm755 "$HOST_DIR/target/release/nerd-deck" "$BIN_DIR/nerd-deck"
+
+    info "Adding nerd-deck settings to the app menu"
+    install -Dm644 "$HOST_DIR/packaging/nerd-deck.svg" "$ICON_DIR/nerd-deck.svg"
+    mkdir -p "$APPS_DIR"
+    sed "s|^Exec=.*|Exec=$BIN_DIR/nerd-deck --settings|" "$HOST_DIR/packaging/nerd-deck.desktop" >"$APPS_DIR/nerd-deck.desktop"
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
         *) warn "$BIN_DIR is not on your PATH; the service doesn't need it, but your shell does" ;;

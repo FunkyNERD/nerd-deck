@@ -74,8 +74,8 @@ UART on the extension header.
 
 ## Host app
 
-Build requirements: the Rust toolchain plus `libudev-dev`, which `serialport`
-needs for USB discovery.
+Build requirements: the Rust toolchain, `libudev-dev` (which `serialport` needs
+for USB discovery) and `libfontconfig1-dev` (for the settings window).
 
 ```bash
 cd host
@@ -87,8 +87,8 @@ cargo run                   # connect and stream (RUST_LOG=debug for more)
 
 On first start the app writes `~/.config/nerd-deck/config.toml` from
 `config.example.toml` (built into the binary). It never overwrites an existing
-config. After editing it, choose **Reload config** in the tray (or restart the
-service).
+config. The settings window (below) edits it for you; if you edit it by hand,
+choose **Reload config** in the tray (or restart the service).
 
 The app finds the device by VID/PID, sends `hello` and the button layout, then
 streams stats. It reconnects automatically if the device is unplugged or reset.
@@ -123,15 +123,41 @@ App names work as the desktop
 shows them or as their desktop file (`org.gnome.Geary`); the log names each
 app as its notifications arrive (`journalctl --user -u nerd-deck | grep notification`).
 
+### Settings window
+
+`nerd-deck --settings` (or **nerd-deck** in the app menu, or a click on the tray
+icon) opens a window for everything in the config:
+
+- **Device:** the connected deck, its port, serial number, firmware and protocol.
+- **Buttons:** the Controls tab as a grid. Pick a button to change its label,
+  its icon (the deck's own symbols, searchable), an image from a file, or its
+  command, which **Run now** tries on the spot. Add, remove and reorder them.
+- **Stats:** update interval, network interface, battery, and which disks the
+  Network tab shows, in what order.
+- **Notifications:** on or off, which apps (each app that has sent one is
+  listed), message text, Do Not Disturb, low-urgency ones, and test
+  notifications for the deck.
+- **Firmware & updates:** the deck's firmware against the bundled one,
+  reinstalling it, automatic updates, the release check, and known decks.
+- **About:** versions, links, licences and a block to paste into bug reports.
+
+Changes are written to `config.toml` straight away, keeping its comments and
+layout, and the service applies them without restarting. A change that would
+make the config invalid isn't written. `--page buttons` (or `stats`,
+`notifications`, ...) opens on that section. Opening it while it's already open
+brings that window to the front. The window is built with
+[Slint](https://slint.dev), used under its royalty-free licence; the About page
+shows Slint's credit, as that licence asks.
+
 ### Tray icon
 
 `nerd-deck --tray` puts the deck's logo in the system tray: in colour while the
 deck is connected, grey while the service waits for it, faded when the service
-isn't running. Its menu shows the connection and firmware version, sends test
-notifications (normal or critical) to the deck, opens the config for editing
-and reloads it, so changes apply without restarting the service. It starts at
-login (`install.sh` and the packages set that up). GNOME needs the AppIndicator
-extension for a tray; Ubuntu ships it.
+isn't running. Click it for the settings window; its menu shows the connection
+and firmware version, sends test notifications (normal or critical) to the deck,
+and opens and reloads the config file. It starts at login (`install.sh` and the
+packages set that up). GNOME needs the AppIndicator extension for a tray;
+Ubuntu ships it.
 
 The tray is a separate process that talks to the service over D-Bus, so the
 deck keeps working without it. The service owns `io.github.FunkyNERD.NerdDeck`
@@ -143,9 +169,10 @@ busctl --user call io.github.FunkyNERD.NerdDeck /io/github/FunkyNERD/NerdDeck \
     io.github.FunkyNERD.NerdDeck1 TestNotification b false
 ```
 
-`Status` returns a dict (connected, port, firmware, version, update, config),
-`Reload` re-reads the config (a broken one is rejected and the old one kept),
-and `StatusChanged` fires when the status changes.
+`Status` returns a dict (connected, port, serial, firmware, board, proto,
+bundled, flashing, version, update, config), `Reload` re-reads the config (a
+broken one is rejected and the old one kept), `ReinstallFirmware` installs the
+bundled firmware, and `StatusChanged` fires when the status changes.
 
 ### Installing
 
@@ -212,7 +239,7 @@ NERD_DECK_FIRMWARE=firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin cargo 
 
 Each release has a `.deb` and an `.rpm` (x86_64, glibc 2.35 or newer: Debian 12+,
 Ubuntu 22.04+, Fedora 36+), with the device firmware bundled. They install the binary to `/usr/bin`, the udev rule,
-the systemd user unit, the tray autostart entry and the example config in
+the systemd user unit, the tray autostart entry, the settings app's menu entry and icon, and the example config in
 `/usr/share/doc/nerd-deck/`. The
 service isn't enabled for anyone, so each user turns it on, and their config is
 created on first start:
@@ -240,10 +267,10 @@ host/packaging/build-packages.sh   # writes host/dist/
 
 ## Next steps
 
-- Add a settings window to the tray app (Slint): buttons, notification
-  filters, stats and updates, written back to the config with its comments.
-- Add device settings (brightness, starting tab, screen-off timer), kept on the
-  device across reboots.
+- Add device settings (brightness, starting tab, idle dimming, screen-off
+  timer), kept on the device across reboots. The settings window already shows
+  them, disabled, on its Device page.
+- Drag to reorder buttons and disks in the settings window.
 - Add GPU stats (NVML for NVIDIA, `/sys/class/drm` for AMD).
 - Add a host-driven `brightness` message, and a screen-off timer once the host
   has been gone for a while.

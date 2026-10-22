@@ -1,0 +1,148 @@
+import { AboutSlint, TextEdit } from "std-widgets.slint";
+import { Theme, Glyphs } from "../theme.slint";
+import { Backend } from "../backend.slint";
+import { Card, SectionTitle, PushButton } from "../widgets.slint";
+
+export component AboutPage inherits VerticalLayout {
+    padding: 24px;
+    spacing: 24px;
+    alignment: start;
+
+    Card {
+        clip: true;
+        HorizontalLayout {
+            y: 0;
+            height: 3px;
+            Rectangle { background: Theme.cyan; }
+            Rectangle { background: Theme.green; }
+            Rectangle { background: Theme.orange; }
+        }
+        VerticalLayout {
+            padding: 24px;
+            padding-top: 28px;
+            spacing: 10px;
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 5px;
+                VerticalLayout { alignment: end; Rectangle { width: 10px; height: 22px; border-radius: 3px; background: Theme.cyan; } }
+                VerticalLayout { alignment: end; Rectangle { width: 10px; height: 40px; border-radius: 3px; background: Theme.green; } }
+                VerticalLayout { alignment: end; Rectangle { width: 10px; height: 29px; border-radius: 3px; background: Theme.orange; } }
+            }
+            Text {
+                text: "nerd-deck";
+                font-size: 28px;
+                font-weight: 700;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Version " + Backend.version + (Backend.firmware == "" ? "" : " · deck firmware " + Backend.firmware);
+                font-size: 13px;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "System stats and touch controls on a USB desk display.";
+                font-size: 14px;
+                color: Theme.text-soft;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "by FunkyNERD";
+                font-size: 12px;
+                color: Theme.text-faint;
+                horizontal-alignment: center;
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                padding-top: 8px;
+                PushButton {
+                    text: "Project page";
+                    icon: Glyphs.external;
+                    clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck"); }
+                }
+                PushButton {
+                    text: "Report a problem";
+                    clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck/issues/new"); }
+                }
+                PushButton {
+                    text: "Release notes";
+                    clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck/releases"); }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 16px;
+        Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+                Text { text: "Made with Slint"; font-size: 14px; font-weight: 600; color: Theme.text; }
+                // Slint's own credit, as its royalty-free licence asks.
+                AboutSlint { }
+                Text {
+                    text: "This settings window is built with the Slint UI toolkit, used under the Slint Royalty-free License.";
+                    font-size: 13px;
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Card {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 12px;
+                alignment: start;
+                Text { text: "Licence"; font-size: 14px; font-weight: 600; color: Theme.text; }
+                Text {
+                    text: "nerd-deck is free software under the MIT licence.\nCopyright © 2026 Jamie Carl";
+                    font-size: 13px;
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                }
+                Text { text: "Also built on"; font-size: 12px; font-weight: 600; color: Theme.text-dim; }
+                Text {
+                    text: "zbus, serialport, espflash, sysinfo and ksni on this PC; LVGL, LovyanGFX and ArduinoJson on the deck. Icons: Font Awesome Free (SIL OFL 1.1).";
+                    font-size: 13px;
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        SectionTitle {
+            title: "For bug reports";
+            subtitle: "Paste this into an issue so we know what you're running.";
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: end;
+            PushButton {
+                text: copied ? "Copied" : "Copy";
+                icon: Glyphs.copy;
+                property <bool> copied;
+                clicked => {
+                    info.select-all();
+                    info.copy();
+                    info.clear-selection();
+                    self.copied = true;
+                }
+            }
+        }
+    }
+    info := TextEdit {
+        text: Backend.sysinfo;
+        read-only: true;
+        height: 96px;
+        font-size: 12px;
+    }
+}

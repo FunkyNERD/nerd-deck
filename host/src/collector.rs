@@ -23,13 +23,14 @@ pub struct Collector {
     interface: Option<String>,
     mounts: Vec<String>,
     removable: bool,
+    battery: bool,
     /// Set by the mount watcher; the disk list is rescanned only then.
     mounts_changed: Arc<AtomicBool>,
     last_sample: Instant,
 }
 
 impl Collector {
-    pub fn new(interface: Option<String>, mounts: Vec<String>, removable: bool) -> Self {
+    pub fn new(interface: Option<String>, mounts: Vec<String>, removable: bool, battery: bool) -> Self {
         let mut sys = System::new();
         // Prime CPU counters; the first usage reading is relative to this.
         sys.refresh_cpu_all();
@@ -41,6 +42,7 @@ impl Collector {
             interface,
             mounts,
             removable,
+            battery,
             mounts_changed: mounts::watch(),
             last_sample: Instant::now(),
         }
@@ -75,7 +77,7 @@ impl Collector {
             },
             net: self.net(elapsed),
             disks: self.disks(),
-            battery: battery::read(),
+            battery: if self.battery { battery::read() } else { None },
         }
     }
 
@@ -170,7 +172,7 @@ const AUTOMOUNT_DIRS: &[&str] = &["/media", "/run/media"];
 /// USB drives (sysinfo checks /dev/disk/by-id for `usb-` links), plus anything
 /// the desktop auto-mounted. The second catches drives sysinfo misses, like SD
 /// cards in a built-in reader, whose kernel removable flag is 0.
-fn is_removable(d: &sysinfo::Disk) -> bool {
+pub fn is_removable(d: &sysinfo::Disk) -> bool {
     d.is_removable() || is_automount(d.mount_point())
 }
 

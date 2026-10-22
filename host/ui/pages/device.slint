@@ -1,0 +1,230 @@
+import { Slider, ComboBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Backend } from "../backend.slint";
+import { Card, SectionTitle, SettingRow, Toggle, Segmented, Pill } from "../widgets.slint";
+
+// A small drawing of the deck showing its System tab.
+component DeckPicture inherits Rectangle {
+    width: 256px;
+    height: 176px;
+    border-radius: 14px;
+    background: #05070A;
+    border-width: 1px;
+    border-color: Theme.border;
+    Rectangle {
+        x: 8px;
+        y: 8px;
+        width: 240px;
+        height: 160px;
+        border-radius: 4px;
+        background: Theme.sidebar;
+        clip: true;
+        opacity: Backend.connected ? 1 : 0.4;
+        HorizontalLayout {
+            y: 0;
+            height: 2px;
+            Rectangle { background: Theme.cyan; }
+            Rectangle { background: Theme.green; }
+            Rectangle { background: Theme.orange; }
+        }
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: 34px;
+            height: 9px;
+            border-radius: 5px;
+            background: Theme.card;
+            border-width: 1px;
+            border-color: Theme.border;
+        }
+        Rectangle {
+            x: 6px;
+            y: 20px;
+            width: 74px;
+            height: 70px;
+            border-radius: 5px;
+            background: Theme.card;
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 22px;
+                border-width: 5px;
+                border-color: Theme.rule;
+            }
+            Rectangle {
+                width: 30px;
+                height: 30px;
+                border-radius: 15px;
+                border-width: 5px;
+                border-color: Theme.cyan;
+                opacity: 0.8;
+            }
+        }
+        Rectangle {
+            x: 84px;
+            y: 20px;
+            width: 150px;
+            height: 70px;
+            border-radius: 5px;
+            background: Theme.card;
+            Rectangle { x: 8px; y: 18px; width: 134px; height: 4px; border-radius: 2px; background: Theme.rule; }
+            Rectangle { x: 8px; y: 18px; width: 42px; height: 4px; border-radius: 2px; background: Theme.cyan; }
+            Rectangle { x: 8px; y: 40px; width: 134px; height: 4px; border-radius: 2px; background: Theme.rule; }
+            Rectangle { x: 8px; y: 40px; width: 8px; height: 4px; border-radius: 2px; background: Theme.orange; }
+        }
+        Rectangle {
+            x: 6px;
+            y: 94px;
+            width: 74px;
+            height: 60px;
+            border-radius: 5px;
+            background: Theme.card;
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 3px;
+                alignment: stretch;
+                for h in [0.4, 0.8, 0.3, 0.6, 0.45]: VerticalLayout {
+                    alignment: end;
+                    Rectangle {
+                        height: 48px * h;
+                        border-radius: 1px;
+                        background: h > 0.7 ? Theme.orange : Theme.green;
+                    }
+                }
+            }
+        }
+        Rectangle {
+            x: 84px;
+            y: 94px;
+            width: 150px;
+            height: 60px;
+            border-radius: 5px;
+            background: Theme.card;
+        }
+    }
+}
+
+component Fact inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono;
+    spacing: 16px;
+    Text {
+        text: root.label;
+        width: 120px;
+        font-size: 13px;
+        color: Theme.text-dim;
+    }
+    Text {
+        text: root.value == "" ? "—" : root.value;
+        font-size: 13px;
+        font-family: root.mono ? Theme.mono : "";
+        color: Theme.text;
+        overflow: elide;
+    }
+}
+
+export component DevicePage inherits VerticalLayout {
+    padding: 24px;
+    spacing: 24px;
+    alignment: start;
+
+    Card {
+        HorizontalLayout {
+            padding: 20px;
+            spacing: 24px;
+            DeckPicture { }
+            VerticalLayout {
+                spacing: 12px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: !Backend.service-running ? "Service not running"
+                            : Backend.connected ? (Backend.board == "wt32-sc01-plus" || Backend.board == "" ? "WT32-SC01 Plus" : Backend.board)
+                            : "No deck connected";
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+                    if Backend.connected: Pill { text: "Connected"; }
+                    if Backend.flashing: Pill {
+                        text: "Updating firmware";
+                        fg: Theme.cyan;
+                        dot: Theme.cyan;
+                        background: Theme.selected;
+                    }
+                }
+                if !Backend.service-running: Text {
+                    text: "Start it with: systemctl --user start nerd-deck";
+                    font-size: 13px;
+                    font-family: Theme.mono;
+                    color: Theme.text-dim;
+                }
+                if Backend.service-running && !Backend.connected && !Backend.flashing: Text {
+                    text: "Plug the deck in with a USB-C cable that carries data.";
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                    wrap: word-wrap;
+                }
+                Fact { label: "Port"; value: Backend.port; mono: true; }
+                Fact { label: "Serial number"; value: Backend.serial; mono: true; }
+                Fact {
+                    label: "Firmware";
+                    value: Backend.firmware == "" ? "" : Backend.firmware == Backend.bundled ? Backend.firmware + " · up to date" : Backend.firmware;
+                }
+                Fact { label: "Protocol"; value: Backend.proto == 0 ? "" : "v" + Backend.proto; }
+                Fact { label: "Screen"; value: Backend.connected ? "480 × 320, touch" : ""; }
+            }
+        }
+    }
+
+    SectionTitle {
+        title: "Display";
+        subtitle: "Coming with a later deck firmware. They'll be kept on the deck, so they survive a reboot.";
+    }
+    Card {
+        VerticalLayout {
+            SettingRow {
+                title: "Brightness";
+                enabled: false;
+                Slider {
+                    width: 220px;
+                    minimum: 5;
+                    maximum: 100;
+                    value: 100;
+                    enabled: false;
+                }
+            }
+            SettingRow {
+                title: "Start on";
+                subtitle: "The tab the deck opens on";
+                enabled: false;
+                Segmented {
+                    options: ["System", "Network", "Controls"];
+                    current: 0;
+                    enabled: false;
+                }
+            }
+            SettingRow {
+                title: "Dim when idle";
+                subtitle: "Lowers brightness until the screen is touched";
+                enabled: false;
+                ComboBox {
+                    width: 180px;
+                    model: ["Never", "After 5 minutes", "After 15 minutes"];
+                    enabled: false;
+                }
+            }
+            SettingRow {
+                title: "Turn off when the PC is away";
+                subtitle: "After 10 minutes on the waiting screen";
+                enabled: false;
+                last: true;
+                Toggle { checked: false; enabled: false; label: "Turn off when the PC is away"; }
+            }
+        }
+    }
+}

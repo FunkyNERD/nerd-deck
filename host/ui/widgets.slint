@@ -1,0 +1,240 @@
+// Small building blocks shared by the pages. Controls here don't change their
+// own state: they report a click and the backend sets the new value, so the
+// window always shows what's in the config.
+
+import { Theme } from "theme.slint";
+
+export component Glyph inherits Text {
+    font-family: Theme.icons;
+    font-weight: 900;
+    font-size: 16px;
+    color: Theme.text;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    accessible-role: none;
+}
+
+export component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+export component SectionTitle inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: 2px;
+    Text {
+        text: root.title;
+        font-size: 14px;
+        font-weight: 600;
+        color: Theme.text;
+        accessible-role: text;
+    }
+    if root.subtitle != "": Text {
+        text: root.subtitle;
+        font-size: 12px;
+        color: Theme.text-dim;
+        wrap: word-wrap;
+    }
+}
+
+// One row of a boxed list: a title and subtitle on the left, a control on the right.
+export component SettingRow inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> last;
+    in property <bool> enabled: true;
+    min-height: 60px;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 16px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.title;
+                font-size: 14px;
+                color: root.enabled ? Theme.text : Theme.text-faint;
+                wrap: word-wrap;
+            }
+            if root.subtitle != "": Text {
+                text: root.subtitle;
+                font-size: 12px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            @children
+        }
+    }
+    if !root.last: Rectangle {
+        x: 0;
+        y: root.height - 1px;
+        width: root.width;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+export component Toggle inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback toggled(bool);
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background: root.checked && root.enabled ? Theme.cyan : Theme.control-border;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-label: root.label;
+    accessible-action-default => { if root.enabled { root.toggled(!root.checked); } }
+    Rectangle {
+        x: root.checked ? 21px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: white;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.checked); }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    in property <bool> enabled: true;
+    callback selected(int);
+    height: 36px;
+    border-radius: 8px;
+    background: Theme.field;
+    border-width: 1px;
+    border-color: Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for option[i] in root.options: Rectangle {
+            border-radius: 6px;
+            background: i == root.current ? Theme.selected : transparent;
+            horizontal-stretch: 1;
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-checked: i == root.current;
+            accessible-action-default => { root.selected(i); }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text {
+                    text: option;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: i == root.current ? Theme.text : Theme.text-dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                clicked => { root.selected(i); }
+            }
+        }
+    }
+}
+
+export component PushButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> primary;
+    // Red text and no fill, for removing things.
+    in property <bool> danger;
+    // No fill or border.
+    in property <bool> flat;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 34px;
+    border-radius: 8px;
+    background: root.primary ? (touch.pressed ? Theme.cyan.darker(20%) : Theme.cyan)
+        : root.danger || root.flat ? (touch.has-hover && root.enabled ? Theme.control : transparent)
+        : touch.has-hover && root.enabled ? Theme.control-hover : Theme.control;
+    border-width: root.primary || root.danger || root.flat ? 0 : 1px;
+    border-color: Theme.control-border;
+    opacity: root.enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: root.text == "" ? 10px : 14px;
+        padding-right: root.text == "" ? 10px : 14px;
+        spacing: 7px;
+        alignment: center;
+        if root.icon != "": Glyph {
+            text: root.icon;
+            font-size: 12px;
+            color: root.primary ? Theme.sidebar : root.danger ? Theme.red-text : Theme.text;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            font-size: 13px;
+            font-weight: root.primary ? 600 : 500;
+            color: root.primary ? Theme.sidebar : root.danger ? Theme.red-text : root.flat ? Theme.text-dim : Theme.text;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A rounded label with a dot, for states like "Connected".
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> fg: Theme.green-text;
+    in property <color> dot: Theme.green;
+    horizontal-stretch: 0;
+    background: Theme.green-bg;
+    border-radius: self.height / 2;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 3px;
+        padding-bottom: 3px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: root.dot;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            color: root.fg;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -103,7 +103,10 @@ impl DeckTray {
 }
 
 impl ksni::Tray for DeckTray {
-    const MENU_ON_ACTIVATE: bool = true;
+    // A click opens the settings; the menu is on the right button.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        open_settings();
+    }
 
     fn id(&self) -> String {
         "nerd-deck".into()
@@ -138,6 +141,13 @@ impl ksni::Tray for DeckTray {
         let running = self.status.is_some();
         let mut menu: Vec<MenuItem<Self>> = vec![
             StandardItem { label: self.summary(), enabled: false, ..Default::default() }.into(),
+            StandardItem {
+                label: "Settings…".into(),
+                icon_name: "configure".into(),
+                activate: Box::new(|_| open_settings()),
+                ..Default::default()
+            }
+            .into(),
         ];
         if let Some(update) = self.status.as_ref().map(|s| &s.update).filter(|u| !u.is_empty()) {
             menu.push(
@@ -178,7 +188,7 @@ impl ksni::Tray for DeckTray {
         );
         menu.push(
             StandardItem {
-                label: "Edit config…".into(),
+                label: "Edit config file…".into(),
                 enabled: running,
                 icon_name: "document-edit".into(),
                 activate: Box::new(|t: &mut Self| {
@@ -211,6 +221,14 @@ impl ksni::Tray for DeckTray {
             .into(),
         );
         menu
+    }
+}
+
+/// Opens the settings window, or brings the open one to the front.
+fn open_settings() {
+    let exe = std::env::current_exe().unwrap_or_else(|_| "nerd-deck".into());
+    if let Err(e) = Command::new(exe).arg("--settings").spawn() {
+        log::warn!("opening the settings window: {e}");
     }
 }
 

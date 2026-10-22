@@ -10,6 +10,7 @@ mod images;
 mod mounts;
 mod notifications;
 mod protocol;
+mod settings;
 mod tray;
 mod updates;
 
@@ -59,6 +60,15 @@ struct Cli {
     /// Show the tray icon, which talks to the running service
     #[arg(long)]
     tray: bool,
+
+    /// Open the settings window
+    #[arg(long)]
+    settings: bool,
+
+    /// With --settings: the section to open on (device, buttons, stats,
+    /// notifications, firmware, about)
+    #[arg(long, requires = "settings")]
+    page: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -70,6 +80,9 @@ fn main() -> Result<()> {
     }
     if cli.tray {
         return tray::run();
+    }
+    if cli.settings {
+        return settings::run(cli.config, cli.page.as_deref());
     }
 
     let cfg = Config::load(cli.config.as_deref())?;
@@ -92,7 +105,12 @@ fn main() -> Result<()> {
 }
 
 fn new_collector(cfg: &Config) -> Collector {
-    Collector::new(cfg.stats.interface.clone(), cfg.stats.mounts.clone(), cfg.stats.removable)
+    Collector::new(
+        cfg.stats.interface.clone(),
+        cfg.stats.mounts.clone(),
+        cfg.stats.removable,
+        cfg.stats.battery,
+    )
 }
 
 /// Why a session ended other than by an error.
@@ -101,6 +119,8 @@ enum SessionEnd {
     Flash(device::Port),
     /// The device settings changed; connect again with the new ones.
     Reconnect,
+    /// Asked for over D-Bus: install the bundled firmware whatever the device runs.
+    Reinstall(device::Port),
 }
 
 /// The service: streams stats to the deck, runs its buttons, and answers the
@@ -114,6 +134,7 @@ struct Host {
     /// their results are only used while the config says so.
     updates: Option<updates::Shared>,
     notifications: Option<Receiver<notifications::Raw>>,
+    seen_apps: notifications::SeenApps,
     flashing: firmware::Flashing,
     api: api::Service,
     commands: Receiver<Command>,
@@ -124,6 +145,7 @@ impl Host {
         let (tx, commands) = mpsc::channel();
         let status = api::Status {
             version: env!("CARGO_PKG_VERSION").into(),
+            bundled: firmware::bundled().map(|fw| fw.version.to_owned()).unwrap_or_default(),
             config: config_path
                 .clone()
                 .or_else(Config::default_path)
@@ -138,6 +160,7 @@ impl Host {
             cfg,
             updates: None,
             notifications: None,
+            seen_apps: notifications::SeenApps::load(),
             api: api::Service::start(status, tx),
             commands,
         };
@@ -164,6 +187,19 @@ impl Host {
                     self.api.update(disconnected);
                     continue;
                 }
+                Ok(SessionEnd::Reinstall(port)) => {
+                    self.api.update(|s| {
+                        disconnected(s);
+                        s.flashing = true;
+                    });
+                    if let Some(fw) = firmware::bundled() {
+                        log::info!("reinstalling firmware {} on {}", fw.version, port.name);
+                        if let Err(e) = firmware::flash(&fw, &port.name, usb_info(&self.cfg, &port)) {
+                            log::error!("firmware reinstall failed: {e:#}");
+                        }
+                    }
+                    self.api.update(|s| s.flashing = false);
+                }
                 Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
             }
             self.api.update(disconnected);
@@ -180,7 +216,7 @@ impl Host {
                 Command::Reload(reply) => {
                     let _ = reply.send(self.reload().map(drop).map_err(|e| format!("{e:#}")));
                 }
-                Command::TestNotification { reply, .. } => {
+                Command::TestNotification { reply, .. } | Command::ReinstallFirmware(reply) => {
                     let _ = reply.send(Err("the deck isn't connected".into()));
                 }
             }
@@ -202,6 +238,9 @@ impl Host {
         }
         if cfg.updates.firmware != self.cfg.updates.firmware {
             self.flashing = firmware::Flashing::new(&cfg);
+        } else {
+            // The settings window may have forgotten a device.
+            self.flashing.reload_known();
         }
         self.cfg = cfg;
         self.start_watchers();
@@ -219,6 +258,7 @@ impl Host {
         self.api.update(|s| {
             s.connected = true;
             s.port = port.name.clone();
+            s.serial = port.serial().unwrap_or_default().to_owned();
         });
 
         conn.send(&HostMsg::Hello {
@@ -245,6 +285,7 @@ impl Host {
 
             let incoming: Vec<_> = self.notifications.iter().flat_map(|rx| rx.try_iter()).collect();
             for raw in incoming {
+                self.seen_apps.record(&raw);
                 if !self.cfg.notifications.enabled {
                     continue;
                 }
@@ -272,6 +313,17 @@ impl Host {
                         let _ = reply.send(sent.as_ref().map_err(|e| e.to_string()).copied());
                         sent?;
                     }
+                    Command::ReinstallFirmware(reply) => {
+                        if firmware::bundled().is_none() {
+                            let _ = reply.send(Err("this build has no bundled firmware".into()));
+                            continue;
+                        }
+                        let _ = reply.send(Ok(()));
+                        let text = "Reinstalling firmware...".to_owned();
+                        conn.send(&HostMsg::Notify { text })?;
+                        thread::sleep(Duration::from_secs(2));
+                        return Ok(SessionEnd::Reinstall(port));
+                    }
                 }
             }
 
@@ -291,11 +343,15 @@ impl Host {
 
             match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
                 Ok(msg) => {
-                    if let DeviceMsg::Hello { fw, board, .. } = &msg {
+                    if let DeviceMsg::Hello { fw, board, proto } = &msg {
                         said_hello = true;
                         // The device rebooted, so it lost any notice.
                         notified = 0;
-                        self.api.update(|s| s.firmware = fw.clone());
+                        self.api.update(|s| {
+                            s.firmware = fw.clone();
+                            s.proto = *proto;
+                            s.board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
+                        });
                         if let Some(version) =
                             self.flashing.should_update(&port, fw, board.as_deref())
                         {
@@ -318,7 +374,10 @@ impl Host {
 fn disconnected(s: &mut api::Status) {
     s.connected = false;
     s.port.clear();
+    s.serial.clear();
     s.firmware.clear();
+    s.board.clear();
+    s.proto = 0;
 }
 
 fn notification(n: notifications::Notification) -> HostMsg {

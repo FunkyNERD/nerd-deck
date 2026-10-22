@@ -1,0 +1,14 @@
+# The settings window in the app menu. The .deb/.rpm install it to
+# /usr/share/applications; host/install.sh rewrites Exec to point at
+# ~/.local/bin and installs it to ~/.local/share/applications.
+[Desktop Entry]
+Type=Application
+Name=nerd-deck
+GenericName=Desk display settings
+Comment=Set up the nerd-deck USB desk display: buttons, stats, notifications and firmware
+Exec=/usr/bin/nerd-deck --settings
+Icon=nerd-deck
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=display;deck;stats;buttons;esp32;
+StartupWMClass=nerd-deck

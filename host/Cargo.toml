@@ -29,9 +29,14 @@ espflash = { version = "4.6.0", default-features = false, features = ["serialpor
 # Desktop notifications off the session bus. 5.x: 6 dropped the blocking API.
 zbus = "5.19.0"
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility"] }
+toml_edit = "0.25"
 
 [profile.release]
 strip = true
+
+[build-dependencies]
+slint-build = "1.18.1"
 
 # Packaging: host/packaging/build-packages.sh runs `cargo deb` and
 # `cargo generate-rpm` with these. Both packages install the same files.
@@ -50,6 +55,8 @@ assets = [
     ["packaging/99-nerd-deck.rules", "usr/lib/udev/rules.d/", "644"],
     ["packaging/nerd-deck.service", "usr/lib/systemd/user/", "644"],
     ["packaging/nerd-deck-tray.desktop", "etc/xdg/autostart/", "644"],
+    ["packaging/nerd-deck.desktop", "usr/share/applications/", "644"],
+    ["packaging/nerd-deck.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["config.example.toml", "usr/share/doc/nerd-deck/", "644"],
 ]
 
@@ -62,5 +69,7 @@ assets = [
     { source = "packaging/99-nerd-deck.rules", dest = "/usr/lib/udev/rules.d/99-nerd-deck.rules", mode = "644" },
     { source = "packaging/nerd-deck.service", dest = "/usr/lib/systemd/user/nerd-deck.service", mode = "644" },
     { source = "packaging/nerd-deck-tray.desktop", dest = "/etc/xdg/autostart/nerd-deck-tray.desktop", mode = "644", config = true },
+    { source = "packaging/nerd-deck.desktop", dest = "/usr/share/applications/nerd-deck.desktop", mode = "644" },
+    { source = "packaging/nerd-deck.svg", dest = "/usr/share/icons/hicolor/scalable/apps/nerd-deck.svg", mode = "644" },
     { source = "config.example.toml", dest = "/usr/share/doc/nerd-deck/config.example.toml", mode = "644", doc = true },
 ]

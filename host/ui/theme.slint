@@ -1,0 +1,56 @@
+// Colours from the deck's own palette (firmware/src/ui/ui.cpp), so the window
+// and the display look like one product.
+export global Theme {
+    out property <color> bg: #0F1319;
+    out property <color> sidebar: #0B0E13;
+    out property <color> card: #151B24;
+    out property <color> border: #232C38;
+    out property <color> rule: #1E2530;
+    out property <color> field: #0F1319;
+    out property <color> control: #1B2330;
+    out property <color> control-hover: #222B39;
+    out property <color> control-border: #2E3948;
+    out property <color> selected: #16303A;
+    out property <color> text: #ECEFF4;
+    out property <color> text-soft: #C3CAD5;
+    out property <color> text-dim: #9AA4B2;
+    out property <color> text-faint: #8792A2;
+    out property <color> muted: #5B6675;
+    out property <color> cyan: #26C6DA;
+    out property <color> green: #66BB6A;
+    out property <color> green-text: #8FD694;
+    out property <color> green-bg: #17301D;
+    out property <color> orange: #FFA726;
+    out property <color> red: #EF5350;
+    out property <color> red-text: #F28B87;
+
+    // The deck's symbols, in the font LVGL builds them from.
+    out property <string> icons: "Font Awesome 5 Free";
+    out property <string> mono: "monospace";
+}
+
+// Font Awesome code points used outside the button icons.
+export global Glyphs {
+    out property <string> desktop: "\u{f108}";
+    out property <string> grid: "\u{f00a}";
+    out property <string> chart: "\u{f201}";
+    out property <string> bell: "\u{f0f3}";
+    out property <string> chip: "\u{f2db}";
+    out property <string> info: "\u{f05a}";
+    out property <string> plus: "\u{f067}";
+    out property <string> trash: "\u{f2ed}";
+    out property <string> play: "\u{f04b}";
+    out property <string> check: "\u{f00c}";
+    out property <string> cross: "\u{f00d}";
+    out property <string> left: "\u{f053}";
+    out property <string> right: "\u{f054}";
+    out property <string> up: "\u{f077}";
+    out property <string> down: "\u{f078}";
+    out property <string> search: "\u{f002}";
+    out property <string> image: "\u{f03e}";
+    out property <string> download: "\u{f019}";
+    out property <string> usb: "\u{f287}";
+    out property <string> warning: "\u{f071}";
+    out property <string> external: "\u{f35d}";
+    out property <string> copy: "\u{f0c5}";
+}

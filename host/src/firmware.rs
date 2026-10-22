@@ -70,6 +70,11 @@ impl Flashing {
         }
     }
 
+    /// Re-read the known devices, which the settings window can change.
+    pub fn reload_known(&mut self) {
+        self.known = KnownDevices::load();
+    }
+
     /// Called on the device's hello. Returns the version to install, if any.
     pub fn should_update(
         &mut self,
@@ -216,14 +221,28 @@ impl KnownDevices {
         Self { path, serials }
     }
 
+    pub fn serials(&self) -> impl Iterator<Item = &str> {
+        self.serials.iter().map(String::as_str)
+    }
+
+    /// Forget a device, so it's never reflashed unasked until it says hello again.
+    pub fn remove(&mut self, serial: &str) {
+        if self.serials.remove(serial) {
+            self.save();
+        }
+    }
+
     pub fn contains(&self, serial: &str) -> bool {
         self.serials.contains(serial)
     }
 
     pub fn insert(&mut self, serial: &str) {
-        if !self.serials.insert(serial.to_owned()) {
-            return;
+        if self.serials.insert(serial.to_owned()) {
+            self.save();
         }
+    }
+
+    fn save(&self) {
         let Some(path) = &self.path else { return };
         let text: String = self.serials.iter().map(|s| format!("{s}\n")).collect();
         let saved = path
