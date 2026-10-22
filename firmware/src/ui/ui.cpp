@@ -518,6 +518,11 @@ void buildHeader() {
     batteryLabel = makeLabel(batteryBox, &lv_font_montserrat_12, kText, "");
 }
 
+// How far the power profile sits below the bottom of the gauge's box: halfway
+// between the ends of the arc (about 16 px above the box's bottom) and the
+// GHz / temperature line.
+constexpr lv_coord_t kProfileDrop = 7;
+
 // "power-saver" -> "Power saver", "balanced-performance" -> "Balanced
 // performance": dashes to spaces, first letter capitalised.
 void setProfile(const char* profile) {
@@ -528,7 +533,7 @@ void setProfile(const char* profile) {
     if (text[0] >= 'a' && text[0] <= 'z') text[0] -= 'a' - 'A';
     if (strcmp(lv_label_get_text(cpuProfileLabel), text) == 0) return;
     lv_label_set_text(cpuProfileLabel, text);
-    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, kProfileDrop);
 }
 
 void buildSystemTab(lv_obj_t* tab) {
@@ -558,9 +563,9 @@ void buildSystemTab(lv_obj_t* tab) {
     lv_obj_align(cpuLabel, LV_ALIGN_CENTER, 0, -6);
     lv_obj_align(makeCaption(cpuArc, "CPU"), LV_ALIGN_CENTER, 0, 18);
 
-    // The power profile, in the gap at the bottom of the gauge.
+    // The power profile, under the gauge.
     cpuProfileLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextFaint, "");
-    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_align_to(cpuProfileLabel, cpuArc, LV_ALIGN_BOTTOM_MID, 0, kProfileDrop);
 
     cpuFreqLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
     lv_obj_align(cpuFreqLabel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
