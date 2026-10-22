@@ -108,13 +108,31 @@ install_binary() {
     install -Dm644 "$HOST_DIR/packaging/nerd-deck.svg" "$ICON_DIR/nerd-deck.svg"
     mkdir -p "$APPS_DIR"
     sed "s|^Exec=.*|Exec=$BIN_DIR/nerd-deck --settings|" "$HOST_DIR/packaging/nerd-deck.desktop" >"$APPS_DIR/nerd-deck.desktop"
+    refresh_icons
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
         *) warn "$BIN_DIR is not on your PATH; the service doesn't need it, but your shell does" ;;
     esac
 }
 
+# Desktops cache icons and menu entries; tell them about the new ones.
+refresh_icons() {
+    touch "${ICON_DIR%/scalable/apps}"
+    if command -v gtk-update-icon-cache >/dev/null && [[ -f ${ICON_DIR%/scalable/apps}/index.theme ]]; then
+        gtk-update-icon-cache -q -t "${ICON_DIR%/scalable/apps}" || true
+    fi
+    command -v update-desktop-database >/dev/null && update-desktop-database -q "$APPS_DIR" || true
+    command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
+    # KDE's running apps keep their own icon cache until told it changed.
+    command -v dbus-send >/dev/null &&
+        dbus-send --session --type=signal /KIconLoader org.kde.KIconLoader.iconChanged int32:0 2>/dev/null || true
+}
+
 install_udev() {
+    if cmp -s "$HOST_DIR/packaging/99-nerd-deck.rules" "$UDEV_RULE"; then
+        info "udev rule $UDEV_RULE is up to date"
+        return
+    fi
     info "Installing udev rule to $UDEV_RULE (needs sudo)"
     sudo install -m644 "$HOST_DIR/packaging/99-nerd-deck.rules" "$UDEV_RULE"
     sudo udevadm control --reload

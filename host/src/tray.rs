@@ -2,6 +2,7 @@
 //! offers a few actions. It holds no state of its own; it asks the running
 //! service over D-Bus (api.rs), so it can start and stop independently.
 
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -221,6 +222,27 @@ impl ksni::Tray for DeckTray {
             .into(),
         );
         menu
+    }
+}
+
+/// Starts the tray if it isn't running: it only starts by itself at login.
+pub fn ensure_running(bus: &Connection) {
+    let running = zbus::blocking::fdo::DBusProxy::new(bus)
+        .and_then(|dbus| dbus.name_has_owner(TRAY_NAME.try_into()?).map_err(Into::into));
+    if !matches!(running, Ok(false)) {
+        return;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| "nerd-deck".into());
+    // Its own process group, so it outlives the window that started it.
+    let started = Command::new(exe)
+        .arg("--tray")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn();
+    if let Err(e) = started {
+        log::warn!("starting the tray: {e}");
     }
 }
 

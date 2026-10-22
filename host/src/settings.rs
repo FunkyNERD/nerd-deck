@@ -58,6 +58,7 @@ pub fn run(config_path: Option<PathBuf>, page: Option<&str>) -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     }
+    crate::tray::ensure_running(&bus);
     let deck = NerdDeckProxyBlocking::new(&bus)?;
     let status = deck.status().ok();
 
