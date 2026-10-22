@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use sysinfo::{Components, Disks, Networks, System};
 
+use crate::battery;
 use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats};
 
 /// Sensor labels to prefer for CPU temperature, in order.
@@ -59,6 +60,7 @@ impl Collector {
             },
             net: self.net(elapsed),
             disks: self.disks(),
+            battery: battery::read(),
         }
     }
 

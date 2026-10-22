@@ -30,11 +30,14 @@ if nothing arrives for 3 s.
   "cpu":  {"usage": 12.5, "cores": [10.0, 15.0], "freq_mhz": 3400, "temp": 54.0},
   "mem":  {"used": 8589934592, "total": 34359738368, "swap_used": 0, "swap_total": 8589934592},
   "net":  {"iface": "enp5s0", "rx_bps": 125000, "tx_bps": 4000},
-  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000}]
+  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000}],
+  "battery": {"percent": 85, "charging": true}
 }
 ```
 Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
 (left out when no sensor is found). The device shows at most 32 cores and 4 disks.
+`battery` is left out when the host has no battery; with more than one, `percent`
+covers them all. The device only shows the battery indicator when it's present.
 
 ### `buttons`
 The layout for the Controls tab: up to 12 buttons, shown 4×3. Sent on connect and

@@ -63,6 +63,13 @@ void handleStats(JsonObjectConst o) {
         disk.total = d["total"] | uint64_t(0);
     }
 
+    JsonObjectConst battery = o["battery"];
+    if (!battery.isNull()) {
+        s.battery.present = true;
+        s.battery.percent = battery["percent"] | 0u;
+        s.battery.charging = battery["charging"] | false;
+    }
+
     ui::updateStats(s);
 }
 

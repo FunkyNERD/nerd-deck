@@ -32,6 +32,12 @@ struct HostStats {
         uint64_t used, total;
     } disks[kMaxDisks];
     uint8_t disk_count;
+
+    struct {
+        bool present;  // false on hosts without a battery
+        uint8_t percent;
+        bool charging;
+    } battery;
 };
 
 struct ButtonDef {

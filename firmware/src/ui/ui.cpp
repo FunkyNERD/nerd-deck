@@ -1,5 +1,6 @@
 #include "ui.hpp"
 
+#include <ctype.h>
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 #include <stdio.h>
@@ -17,19 +18,44 @@ constexpr lv_coord_t kNetChartMax = 1000;
 // Value changes ease over this long.
 constexpr uint32_t kAnimMs = 500;
 
-const lv_color_t kRxColor = lv_palette_main(LV_PALETTE_CYAN);
-const lv_color_t kTxColor = lv_palette_main(LV_PALETTE_ORANGE);
+// Palette, shared with the waiting screen.
+constexpr uint32_t kBg = 0x0B0E13;
+constexpr uint32_t kCard = 0x151B24;
+constexpr uint32_t kCardBorder = 0x232C38;
+constexpr uint32_t kTrack = 0x1E2530;
+constexpr uint32_t kText = 0xECEFF4;
+constexpr uint32_t kTextDim = 0x9AA4B2;
+constexpr uint32_t kTextFaint = 0x8792A2;
+constexpr uint32_t kCyan = 0x26C6DA;
+constexpr uint32_t kGreen = 0x66BB6A;
+constexpr uint32_t kOrange = 0xFFA726;
+constexpr uint32_t kRed = 0xEF5350;
+constexpr uint32_t kStripe[] = {kCyan, kGreen, kOrange};
+
+constexpr lv_coord_t kHeaderH = 44;  // 3 px stripe + tab pills
+constexpr lv_coord_t kGap = 8;
+
+const lv_color_t kRxColor = lv_color_hex(kCyan);
+const lv_color_t kTxColor = lv_color_hex(kOrange);
+
+// Header
+lv_obj_t* batteryBox;
+lv_obj_t* batteryBolt;
+lv_obj_t* batteryFill;
+lv_obj_t* batteryLabel;
 
 // System tab
 lv_obj_t* cpuArc;
 lv_obj_t* cpuLabel;
 lv_obj_t* cpuInfoLabel;
 lv_obj_t* coreBars[kMaxCores];
+lv_obj_t* loadLabel;
 lv_obj_t* memBar;
 lv_obj_t* memLabel;
 lv_obj_t* swapBar;
 lv_obj_t* swapLabel;
-lv_obj_t* infoLabel;
+lv_obj_t* hostLabel;
+lv_obj_t* uptimeLabel;
 
 // Network tab
 lv_obj_t* netTitle;
@@ -55,6 +81,7 @@ float netPeriodMs = 1000.0f;  // smoothed stats interval = time per scroll step
 bool netScrolling = false;
 lv_obj_t* diskBars[kMaxDisks];
 lv_obj_t* diskLabels[kMaxDisks];
+lv_obj_t* diskUseLabels[kMaxDisks];
 
 // Controls tab
 lv_obj_t* buttonGrid;
@@ -71,9 +98,7 @@ ButtonSlot slots[kMaxButtons];
 size_t slotCount = 0;
 
 // Waiting screen: covers everything while the host isn't connected.
-constexpr uint32_t kWaitBg = 0x0B0E13;
-constexpr uint32_t kWaitAccent = 0x26C6DA;
-constexpr uint32_t kWaitMarkColors[] = {0x26C6DA, 0x66BB6A, 0xFFA726};
+constexpr uint32_t kWaitMarkColors[] = {kCyan, kGreen, kOrange};
 constexpr lv_coord_t kWaitBarHeights[] = {30, 56, 40};
 lv_obj_t* waitScreen;
 lv_obj_t* waitBars[3];
@@ -85,6 +110,8 @@ bool waitShown = false;
 
 // Overlays
 lv_obj_t* toast;
+lv_obj_t* toastDot;
+lv_obj_t* toastLabel;
 lv_timer_t* toastTimer;
 
 void fmtBytes(uint64_t v, char* out, size_t n) {
@@ -108,10 +135,61 @@ uint8_t pct(uint64_t used, uint64_t total) {
     return total ? static_cast<uint8_t>(used * 100 / total) : 0;
 }
 
-lv_obj_t* makeBar(lv_obj_t* parent, lv_coord_t w) {
+// Green, then orange from 75%, red from 90%.
+lv_color_t fillColor(uint8_t p) { return lv_color_hex(p >= 90 ? kRed : p >= 75 ? kOrange : kGreen); }
+
+void noScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
+
+// A plain filled rectangle, without the theme's styles.
+lv_obj_t* makeRect(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, uint32_t color, lv_coord_t radius) {
+    lv_obj_t* r = lv_obj_create(parent);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_size(r, w, h);
+    lv_obj_set_style_bg_color(r, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(r, radius, 0);
+    lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
+    return r;
+}
+
+lv_obj_t* makeLabel(lv_obj_t* parent, const lv_font_t* font, uint32_t color, const char* text) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_label_set_text(l, text);
+    return l;
+}
+
+// Small spaced-out heading at the top-left of a card.
+lv_obj_t* makeCaption(lv_obj_t* parent, const char* text) {
+    lv_obj_t* l = makeLabel(parent, &lv_font_montserrat_12, kTextDim, text);
+    lv_obj_set_style_text_letter_space(l, 2, 0);
+    return l;
+}
+
+lv_obj_t* makeCard(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
+    lv_obj_t* c = makeRect(parent, w, h, kCard, 10);
+    lv_obj_set_style_border_color(c, lv_color_hex(kCardBorder), 0);
+    lv_obj_set_style_border_width(c, 1, 0);
+    lv_obj_set_style_pad_hor(c, 12, 0);
+    lv_obj_set_style_pad_ver(c, 8, 0);
+    lv_obj_set_pos(c, x, y);
+    noScroll(c);
+    return c;
+}
+
+// Thin rounded bar: track plus coloured fill.
+lv_obj_t* makeBar(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, uint32_t color) {
     lv_obj_t* bar = lv_bar_create(parent);
-    lv_obj_set_size(bar, w, 12);
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, w, h);
     lv_bar_set_range(bar, 0, 100);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kTrack), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 3, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(color), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(bar, 3, LV_PART_INDICATOR);
     lv_obj_set_style_anim_time(bar, kAnimMs, 0);
     return bar;
 }
@@ -133,71 +211,147 @@ void animateCpu(int32_t target) {
     lv_anim_start(&a);  // replaces any running animation on the arc
 }
 
-void noScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
+// Tab pills on the left of the header, the stripe above them, and the battery
+// on the right.
+void styleHeader(lv_obj_t* tabview) {
+    lv_obj_t* btns = lv_tabview_get_tab_btns(tabview);
+    lv_obj_set_width(btns, 340);
+    lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(btns, 0, 0);
+    lv_obj_set_style_pad_top(btns, 7, 0);
+    lv_obj_set_style_pad_bottom(btns, 3, 0);
+    lv_obj_set_style_pad_left(btns, 8, 0);
+    lv_obj_set_style_pad_right(btns, 0, 0);
+    lv_obj_set_style_pad_column(btns, 4, 0);
+
+    lv_obj_set_style_radius(btns, LV_RADIUS_CIRCLE, LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(btns, 0, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(btns, lv_color_hex(kTextFaint), LV_PART_ITEMS);
+    lv_obj_set_style_text_font(btns, &lv_font_montserrat_14, LV_PART_ITEMS);
+    lv_obj_set_style_outline_width(btns, 0, LV_PART_ITEMS | LV_STATE_FOCUS_KEY);
+    const lv_style_selector_t checked = LV_PART_ITEMS | LV_STATE_CHECKED;
+    lv_obj_set_style_bg_color(btns, lv_color_hex(kCard), checked);
+    lv_obj_set_style_bg_opa(btns, LV_OPA_COVER, checked);
+    lv_obj_set_style_border_color(btns, lv_color_hex(kCardBorder), checked);
+    lv_obj_set_style_border_width(btns, 1, checked);
+    lv_obj_set_style_border_side(btns, LV_BORDER_SIDE_FULL, checked);
+    lv_obj_set_style_text_color(btns, lv_color_hex(kText), checked);
+
+    for (size_t i = 0; i < 3; i++) {
+        lv_obj_t* r = makeRect(tabview, kScreenWidth / 3, 3, kStripe[i], 0);
+        lv_obj_add_flag(r, LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_pos(r, i * (kScreenWidth / 3), 0);
+    }
+
+    // Battery: bolt (while charging), outline with fill, percentage. Hidden
+    // unless the host reports a battery.
+    batteryBox = lv_obj_create(tabview);
+    lv_obj_remove_style_all(batteryBox);
+    lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(batteryBox, LV_SIZE_CONTENT, 34);
+    lv_obj_set_flex_flow(batteryBox, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(batteryBox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(batteryBox, 5, 0);
+    lv_obj_align(batteryBox, LV_ALIGN_TOP_RIGHT, -10, 7);
+    lv_obj_clear_flag(batteryBox, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
+
+    batteryBolt = makeLabel(batteryBox, &lv_font_montserrat_12, kGreen, LV_SYMBOL_CHARGE);
+
+    lv_obj_t* body = lv_obj_create(batteryBox);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_size(body, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t* shell = makeRect(body, 22, 12, kBg, 3);
+    lv_obj_set_style_border_color(shell, lv_color_hex(kTextFaint), 0);
+    lv_obj_set_style_border_width(shell, 2, 0);
+    lv_obj_set_style_pad_all(shell, 1, 0);
+    batteryFill = makeRect(shell, LV_PCT(100), LV_PCT(100), kGreen, 1);
+    makeRect(body, 2, 5, kTextFaint, 1);  // terminal nub
+
+    batteryLabel = makeLabel(batteryBox, &lv_font_montserrat_12, kText, "");
+}
 
 void buildSystemTab(lv_obj_t* tab) {
     noScroll(tab);
 
-    cpuArc = lv_arc_create(tab);
-    lv_obj_set_size(cpuArc, 130, 130);
-    lv_obj_align(cpuArc, LV_ALIGN_TOP_LEFT, 0, 0);
+    // CPU gauge card.
+    lv_obj_t* cpuCard = makeCard(tab, 0, 0, 150, 160);
+    cpuArc = lv_arc_create(cpuCard);
+    lv_obj_set_size(cpuArc, 116, 116);
+    lv_obj_align(cpuArc, LV_ALIGN_TOP_MID, 0, -2);
     lv_arc_set_rotation(cpuArc, 135);
     lv_arc_set_bg_angles(cpuArc, 0, 270);
     lv_arc_set_range(cpuArc, 0, 100);
     lv_arc_set_value(cpuArc, 0);
     lv_obj_remove_style(cpuArc, nullptr, LV_PART_KNOB);
     lv_obj_clear_flag(cpuArc, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_pad_all(cpuArc, 0, 0);
+    lv_obj_set_style_bg_opa(cpuArc, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_arc_width(cpuArc, 10, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(cpuArc, 10, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(cpuArc, lv_color_hex(kTrack), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(cpuArc, lv_color_hex(kCyan), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(cpuArc, true, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(cpuArc, true, LV_PART_INDICATOR);
 
-    cpuLabel = lv_label_create(cpuArc);
-    lv_obj_set_style_text_font(cpuLabel, &lv_font_montserrat_28, 0);
-    lv_label_set_text(cpuLabel, "--%");
-    lv_obj_center(cpuLabel);
+    cpuLabel = makeLabel(cpuArc, &lv_font_montserrat_28, kText, "--%");
+    lv_obj_align(cpuLabel, LV_ALIGN_CENTER, 0, -6);
+    lv_obj_align(makeCaption(cpuArc, "CPU"), LV_ALIGN_CENTER, 0, 18);
 
-    cpuInfoLabel = lv_label_create(tab);
-    lv_obj_set_style_text_font(cpuInfoLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_width(cpuInfoLabel, 130);
-    lv_obj_set_style_text_align(cpuInfoLabel, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(cpuInfoLabel, "CPU");
-    lv_obj_align_to(cpuInfoLabel, cpuArc, LV_ALIGN_OUT_BOTTOM_MID, 0, -14);
+    cpuInfoLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
+    lv_obj_align(cpuInfoLabel, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    // Right column: memory, swap, misc info.
-    const lv_coord_t colX = 150, colW = 290;
+    // Right column: memory, swap, host and uptime.
+    const lv_coord_t colX = 150 + kGap, colW = 464 - colX;
+    const lv_coord_t halfW = (colW - kGap) / 2;
 
-    memLabel = lv_label_create(tab);
-    lv_label_set_text(memLabel, "RAM");
-    lv_obj_set_pos(memLabel, colX, 0);
-    memBar = makeBar(tab, colW);
-    lv_obj_set_pos(memBar, colX, 22);
+    auto memCard = [&](lv_coord_t y, const char* caption, lv_obj_t** label, lv_obj_t** bar) {
+        lv_obj_t* card = makeCard(tab, colX, y, colW, 48);
+        makeCaption(card, caption);
+        *label = makeLabel(card, &lv_font_montserrat_14, kText, "");
+        lv_label_set_recolor(*label, true);
+        lv_obj_align(*label, LV_ALIGN_TOP_RIGHT, 0, -2);
+        *bar = makeBar(card, LV_PCT(100), 6, kGreen);
+        lv_obj_align(*bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    };
+    memCard(0, "RAM", &memLabel, &memBar);
+    memCard(48 + kGap, "SWAP", &swapLabel, &swapBar);
 
-    swapLabel = lv_label_create(tab);
-    lv_label_set_text(swapLabel, "Swap");
-    lv_obj_set_pos(swapLabel, colX, 44);
-    swapBar = makeBar(tab, colW);
-    lv_obj_set_pos(swapBar, colX, 66);
+    auto infoCard = [&](lv_coord_t x, const char* caption) {
+        lv_obj_t* card = makeCard(tab, x, 2 * (48 + kGap), halfW, 48);
+        makeCaption(card, caption);
+        lv_obj_t* value = makeLabel(card, &lv_font_montserrat_14, kText, "");
+        lv_obj_set_width(value, LV_PCT(100));
+        lv_label_set_long_mode(value, LV_LABEL_LONG_DOT);
+        lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+        return value;
+    };
+    hostLabel = infoCard(colX, "HOST");
+    uptimeLabel = infoCard(colX + halfW + kGap, "UPTIME");
 
-    infoLabel = lv_label_create(tab);
-    lv_obj_set_style_text_font(infoLabel, &lv_font_montserrat_12, 0);
-    lv_label_set_text(infoLabel, "");
-    lv_obj_set_pos(infoLabel, colX, 90);
+    // Per-core usage: one vertical bar per core, shown as the host reports
+    // them. Separate bars (not lv_chart) so each animates. Load averages sit
+    // in the header, next to the bars they relate to.
+    const lv_coord_t coresY = 160 + kGap;
+    lv_obj_t* coresCard = makeCard(tab, 0, coresY, 464, 265 - coresY);
+    makeCaption(coresCard, "CORES");
+    loadLabel = makeLabel(coresCard, &lv_font_montserrat_12, kTextFaint, "");
+    lv_label_set_recolor(loadLabel, true);
+    lv_obj_align(loadLabel, LV_ALIGN_TOP_RIGHT, 0, 0);
 
-    // Per-core usage across the bottom: one vertical bar per core, shown as
-    // the host reports them. Separate bars (not lv_chart) so each animates.
-    lv_obj_t* coreRow = lv_obj_create(tab);
-    lv_obj_set_size(coreRow, LV_PCT(100), 80);
-    lv_obj_align(coreRow, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_t* coreRow = lv_obj_create(coresCard);
+    lv_obj_remove_style_all(coreRow);
+    lv_obj_set_size(coreRow, LV_PCT(100), 265 - coresY - 2 - 16 - 21);
+    lv_obj_align(coreRow, LV_ALIGN_BOTTOM_LEFT, 0, 2);
     lv_obj_set_flex_flow(coreRow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(coreRow, 6, 0);
-    lv_obj_set_style_pad_column(coreRow, 3, 0);
+    lv_obj_set_style_pad_column(coreRow, 4, 0);
     noScroll(coreRow);
     for (size_t i = 0; i < kMaxCores; i++) {
-        lv_obj_t* bar = lv_bar_create(coreRow);
-        lv_bar_set_range(bar, 0, 100);
-        lv_obj_set_height(bar, LV_PCT(100));
+        lv_obj_t* bar = makeBar(coreRow, 4, LV_PCT(100), kCyan);
         lv_obj_set_flex_grow(bar, 1);
-        lv_obj_set_style_radius(bar, 2, LV_PART_MAIN);
-        lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(bar, lv_palette_main(LV_PALETTE_GREEN), LV_PART_INDICATOR);
-        lv_obj_set_style_anim_time(bar, kAnimMs, 0);
         lv_obj_add_flag(bar, LV_OBJ_FLAG_HIDDEN);
         coreBars[i] = bar;
     }
@@ -206,25 +360,29 @@ void buildSystemTab(lv_obj_t* tab) {
 void buildNetworkTab(lv_obj_t* tab) {
     noScroll(tab);
 
-    netTitle = lv_label_create(tab);
-    lv_label_set_text(netTitle, "Network");
-    lv_obj_set_pos(netTitle, 0, 0);
+    // Download / upload rate cards.
+    const lv_coord_t statW = (464 - kGap) / 2;
+    auto rateCard = [&](lv_coord_t x, const char* caption, uint32_t color) {
+        lv_obj_t* card = makeCard(tab, x, 0, statW, 60);
+        lv_label_set_recolor(makeCaption(card, caption), true);
+        lv_obj_t* value = makeLabel(card, &lv_font_montserrat_20, color, "--");
+        lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, 0, 2);
+        return value;
+    };
+    rxLabel = rateCard(0, "#26C6DA " LV_SYMBOL_DOWNLOAD "#  DOWN", kCyan);
+    txLabel = rateCard(statW + kGap, "#FFA726 " LV_SYMBOL_UPLOAD "#  UP", kOrange);
 
-    rxLabel = lv_label_create(tab);
-    lv_obj_set_style_text_color(rxLabel, kRxColor, 0);
-    lv_label_set_text(rxLabel, LV_SYMBOL_DOWNLOAD " --");
-    lv_obj_set_pos(rxLabel, 170, 0);
+    // Graph card: interface name and peak scale above the scrolling chart.
+    const lv_coord_t chartY = 60 + kGap, chartH = 112;
+    lv_obj_t* chartCard = makeCard(tab, 0, chartY, 464, chartH);
+    netTitle = makeCaption(chartCard, "NETWORK");
+    netPeakLabel = makeLabel(chartCard, &lv_font_montserrat_12, kTextFaint, "");
+    lv_obj_align(netPeakLabel, LV_ALIGN_TOP_RIGHT, 0, 0);
 
-    txLabel = lv_label_create(tab);
-    lv_obj_set_style_text_color(txLabel, kTxColor, 0);
-    lv_label_set_text(txLabel, LV_SYMBOL_UPLOAD " --");
-    lv_obj_set_pos(txLabel, 310, 0);
-
-    // The clip box carries the chart's look; the chart itself is transparent.
-    netClip = lv_obj_create(tab);
-    lv_obj_set_size(netClip, LV_PCT(100), 120);
-    lv_obj_set_pos(netClip, 0, 24);
-    lv_obj_set_style_pad_all(netClip, 0, 0);
+    netClip = lv_obj_create(chartCard);
+    lv_obj_remove_style_all(netClip);
+    lv_obj_set_size(netClip, LV_PCT(100), chartH - 2 - 16 - 19);
+    lv_obj_align(netClip, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     noScroll(netClip);
     lv_obj_update_layout(netClip);
     const lv_coord_t visibleW = lv_obj_get_content_width(netClip);
@@ -238,6 +396,8 @@ void buildNetworkTab(lv_obj_t* tab) {
     lv_obj_set_style_radius(netChart, 0, 0);
     lv_obj_set_style_pad_all(netChart, 0, 0);
     lv_obj_set_style_pad_ver(netChart, 4, 0);
+    lv_obj_set_style_line_color(netChart, lv_color_hex(kTrack), LV_PART_MAIN);
+    lv_obj_set_style_line_width(netChart, 2, LV_PART_ITEMS);
     lv_chart_set_type(netChart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(netChart, kNetHistory + 1);
     lv_chart_set_range(netChart, LV_CHART_AXIS_PRIMARY_Y, 0, kNetChartMax);
@@ -248,22 +408,24 @@ void buildNetworkTab(lv_obj_t* tab) {
     lv_chart_set_ext_y_array(netChart, rxSeries, rxPoints);
     lv_chart_set_ext_y_array(netChart, txSeries, txPoints);
 
-    // Top-of-chart scale; the graph is normalised to it.
-    netPeakLabel = lv_label_create(netClip);
-    lv_obj_set_style_text_font(netPeakLabel, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_opa(netPeakLabel, LV_OPA_70, 0);
-    lv_label_set_text(netPeakLabel, "");
-    lv_obj_align(netPeakLabel, LV_ALIGN_TOP_RIGHT, -4, 2);
-
-    // Disks: two per row under the chart.
+    // Disks: two per row; each bar is coloured by how full it is.
+    const lv_coord_t disksY = chartY + chartH + kGap;
+    lv_obj_t* disksCard = makeCard(tab, 0, disksY, 464, 265 - disksY);
+    const lv_coord_t diskW = (464 - 2 - 24 - 20) / 2;
     for (size_t i = 0; i < kMaxDisks; i++) {
-        const lv_coord_t x = (i % 2) * 225, y = 154 + (i / 2) * 40;
-        diskLabels[i] = lv_label_create(tab);
-        lv_obj_set_style_text_font(diskLabels[i], &lv_font_montserrat_12, 0);
+        const lv_coord_t x = (i % 2) * (diskW + 20), y = (i / 2) * 32;
+        diskLabels[i] = makeLabel(disksCard, &lv_font_montserrat_12, kText, "");
+        lv_obj_set_width(diskLabels[i], diskW / 2);
+        lv_label_set_long_mode(diskLabels[i], LV_LABEL_LONG_DOT);
         lv_obj_set_pos(diskLabels[i], x, y);
-        diskBars[i] = makeBar(tab, 210);
-        lv_obj_set_pos(diskBars[i], x, y + 18);
+        diskUseLabels[i] = makeLabel(disksCard, &lv_font_montserrat_12, kTextDim, "");
+        lv_obj_set_width(diskUseLabels[i], diskW);
+        lv_obj_set_style_text_align(diskUseLabels[i], LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_pos(diskUseLabels[i], x, y);
+        diskBars[i] = makeBar(disksCard, diskW, 6, kGreen);
+        lv_obj_set_pos(diskBars[i], x, y + 19);
         lv_obj_add_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -298,45 +460,25 @@ void buildControlsTab(lv_obj_t* tab) {
     static const lv_coord_t rows[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
                                       LV_GRID_TEMPLATE_LAST};
     lv_obj_set_grid_dsc_array(buttonGrid, cols, rows);
-    lv_obj_set_style_pad_gap(buttonGrid, 8, 0);
+    lv_obj_set_style_pad_gap(buttonGrid, kGap, 0);
 
-    noButtonsLabel = lv_label_create(tab);
-    lv_label_set_text(noButtonsLabel, "No buttons yet.\nAdd [[button]] entries to the host config.");
+    noButtonsLabel = makeLabel(tab, &lv_font_montserrat_14, kTextDim,
+                               "No buttons yet.\nAdd [[button]] entries to the host config.");
     lv_obj_set_style_text_align(noButtonsLabel, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(noButtonsLabel);
-}
-
-// A plain filled rectangle, without the theme's styles.
-lv_obj_t* makeRect(lv_obj_t* parent, lv_coord_t w, lv_coord_t h, uint32_t color, lv_coord_t radius) {
-    lv_obj_t* r = lv_obj_create(parent);
-    lv_obj_remove_style_all(r);
-    lv_obj_set_size(r, w, h);
-    lv_obj_set_style_bg_color(r, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(r, radius, 0);
-    lv_obj_clear_flag(r, LV_OBJ_FLAG_CLICKABLE);
-    return r;
-}
-
-lv_obj_t* makeWaitLabel(lv_obj_t* parent, const lv_font_t* font, uint32_t color, const char* text) {
-    lv_obj_t* l = lv_label_create(parent);
-    lv_obj_set_style_text_font(l, font, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_label_set_text(l, text);
-    return l;
 }
 
 void buildWaitScreen() {
     waitScreen = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(waitScreen);
     lv_obj_set_size(waitScreen, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(waitScreen, lv_color_hex(kWaitBg), 0);
+    lv_obj_set_style_bg_color(waitScreen, lv_color_hex(kBg), 0);
     lv_obj_set_style_bg_opa(waitScreen, LV_OPA_COVER, 0);
     noScroll(waitScreen);  // stays clickable, so it swallows touches meant for the tabs below
 
     // Three-colour stripe along the top edge.
     for (size_t i = 0; i < 3; i++)
-        lv_obj_set_pos(makeRect(waitScreen, kScreenWidth / 3, 3, kWaitMarkColors[i], 0),
+        lv_obj_set_pos(makeRect(waitScreen, kScreenWidth / 3, 3, kStripe[i], 0),
                        i * (kScreenWidth / 3), 0);
 
     lv_obj_t* col = lv_obj_create(waitScreen);
@@ -358,12 +500,12 @@ void buildWaitScreen() {
     }
 
     char word[48];
-    snprintf(word, sizeof word, "nerd#%06X -#deck", static_cast<unsigned>(kWaitAccent));
-    waitWord = makeWaitLabel(col, &lv_font_montserrat_40, 0xECEFF4, word);
+    snprintf(word, sizeof word, "nerd#%06X -#deck", static_cast<unsigned>(kCyan));
+    waitWord = makeLabel(col, &lv_font_montserrat_40, kText, word);
     lv_label_set_recolor(waitWord, true);
 
     // The built-in fonts are ASCII plus LVGL's symbols, so the separator is LV_SYMBOL_BULLET.
-    waitTag = makeWaitLabel(col, &lv_font_montserrat_12, 0x9AA4B2,
+    waitTag = makeLabel(col, &lv_font_montserrat_12, kTextDim,
                             "SYSTEM STATS  " LV_SYMBOL_BULLET "  TOUCH CONTROLS");
     lv_obj_set_style_text_letter_space(waitTag, 3, 0);
 
@@ -371,9 +513,9 @@ void buildWaitScreen() {
     waitPill = lv_obj_create(waitScreen);
     lv_obj_remove_style_all(waitPill);
     lv_obj_set_size(waitPill, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_color(waitPill, lv_color_hex(0x151B24), 0);
+    lv_obj_set_style_bg_color(waitPill, lv_color_hex(kCard), 0);
     lv_obj_set_style_bg_opa(waitPill, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(waitPill, lv_color_hex(0x232C38), 0);
+    lv_obj_set_style_border_color(waitPill, lv_color_hex(kCardBorder), 0);
     lv_obj_set_style_border_width(waitPill, 1, 0);
     lv_obj_set_style_radius(waitPill, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_pad_hor(waitPill, 16, 0);
@@ -387,13 +529,13 @@ void buildWaitScreen() {
     lv_obj_remove_style_all(dot);
     lv_obj_set_size(dot, 8, 8);
     lv_obj_add_flag(dot, LV_OBJ_FLAG_OVERFLOW_VISIBLE);  // the ring grows past it
-    waitRing = makeRect(dot, 8, 8, kWaitAccent, LV_RADIUS_CIRCLE);
+    waitRing = makeRect(dot, 8, 8, kCyan, LV_RADIUS_CIRCLE);
     lv_obj_center(waitRing);
-    lv_obj_center(makeRect(dot, 8, 8, kWaitAccent, LV_RADIUS_CIRCLE));
+    lv_obj_center(makeRect(dot, 8, 8, kCyan, LV_RADIUS_CIRCLE));
 
-    makeWaitLabel(waitPill, &lv_font_montserrat_12, 0xC3CAD5, "Waiting for host");
+    makeLabel(waitPill, &lv_font_montserrat_12, 0xC3CAD5, "Waiting for host");
 
-    lv_obj_t* ver = makeWaitLabel(waitScreen, &lv_font_montserrat_12, 0x8792A2, "fw " FW_VERSION);
+    lv_obj_t* ver = makeLabel(waitScreen, &lv_font_montserrat_12, kTextFaint, "fw " FW_VERSION);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
 }
 
@@ -512,12 +654,24 @@ void buildOverlays() {
     waitShown = true;  // until the host's first message
     startWaitAnims();
 
-    toast = lv_label_create(lv_layer_top());
-    lv_obj_set_style_bg_opa(toast, LV_OPA_90, 0);
-    lv_obj_set_style_radius(toast, 6, 0);
-    lv_obj_set_style_pad_all(toast, 8, 0);
-    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -30);
+    // Toast: a pill like the waiting screen's, with a green or red dot.
+    toast = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(toast);
+    lv_obj_set_size(toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(toast, lv_color_hex(kCard), 0);
+    lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(toast, 1, 0);
+    lv_obj_set_style_radius(toast, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(toast, 16, 0);
+    lv_obj_set_style_pad_ver(toast, 8, 0);
+    lv_obj_set_style_pad_column(toast, 10, 0);
+    lv_obj_set_flex_flow(toast, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(toast, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_clear_flag(toast, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
+    toastDot = makeRect(toast, 8, 8, kGreen, LV_RADIUS_CIRCLE);
+    toastLabel = makeLabel(toast, &lv_font_montserrat_12, kText, "");
 
     toastTimer = lv_timer_create([](lv_timer_t*) { lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN); },
                                  1500, nullptr);
@@ -552,7 +706,7 @@ void updateNetScale() {
     }
     char buf[16];
     fmtBytes(static_cast<uint64_t>(peak), buf, sizeof buf);
-    lv_label_set_text_fmt(netPeakLabel, "%s/s", buf);
+    lv_label_set_text_fmt(netPeakLabel, "peak %s/s", buf);
 
     renormaliseNet();
     if (peak != netScaleTo) {
@@ -623,13 +777,45 @@ void onNetSample(float rx, float tx) {
     if (!netScrolling) startNetStep();
 }
 
+void updateBattery(const HostStats& s) {
+    if (!s.battery.present) {
+        lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const uint8_t p = s.battery.percent > 100 ? 100 : s.battery.percent;
+    const lv_color_t color = lv_color_hex(p <= 10 ? kRed : p <= 20 ? kOrange : kGreen);
+    lv_obj_set_width(batteryFill, LV_PCT(p));
+    lv_obj_set_style_bg_color(batteryFill, color, 0);
+    lv_obj_set_style_text_color(batteryBolt, color, 0);
+    if (s.battery.charging) lv_obj_clear_flag(batteryBolt, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(batteryBolt, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(batteryLabel, "%u%%", static_cast<unsigned>(p));
+    lv_obj_clear_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
+}
+
 }  // namespace
 
 void init() {
-    lv_obj_t* tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 40);
-    buildSystemTab(lv_tabview_add_tab(tabview, LV_SYMBOL_HOME " System"));
-    buildNetworkTab(lv_tabview_add_tab(tabview, LV_SYMBOL_WIFI " Network"));
-    buildControlsTab(lv_tabview_add_tab(tabview, LV_SYMBOL_KEYBOARD " Controls"));
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(kBg), 0);
+
+    lv_obj_t* tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, kHeaderH);
+    lv_obj_set_style_bg_color(tabview, lv_color_hex(kBg), 0);
+    lv_obj_set_style_bg_opa(tabview, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
+
+    lv_obj_t* tabs[] = {
+        lv_tabview_add_tab(tabview, LV_SYMBOL_HOME " System"),
+        lv_tabview_add_tab(tabview, LV_SYMBOL_WIFI " Network"),
+        lv_tabview_add_tab(tabview, LV_SYMBOL_KEYBOARD " Controls"),
+    };
+    for (lv_obj_t* tab : tabs) {
+        lv_obj_set_style_pad_all(tab, kGap, 0);
+        lv_obj_set_style_pad_top(tab, 3, 0);
+    }
+    styleHeader(tabview);
+    buildSystemTab(tabs[0]);
+    buildNetworkTab(tabs[1]);
+    buildControlsTab(tabs[2]);
     buildOverlays();
 #ifdef NERD_START_TAB
     // Debug: open on a given tab (0 System, 1 Network, 2 Controls).
@@ -640,61 +826,79 @@ void init() {
 void updateStats(const HostStats& s) {
     char a[16], b[16], buf[160];
 
+    updateBattery(s);
+
     // CPU
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
     // stdlib snprintf: LVGL's built-in printf has no float support by default.
     // The built-in fonts are ASCII-only, so no degree sign.
     if (s.cpu.has_temp)
-        snprintf(buf, sizeof buf, "CPU  %u MHz  %.0f C", static_cast<unsigned>(s.cpu.freq_mhz), s.cpu.temp);
+        snprintf(buf, sizeof buf, "%.1f GHz  " LV_SYMBOL_BULLET "  %.0f C", s.cpu.freq_mhz / 1000.0, s.cpu.temp);
     else
-        snprintf(buf, sizeof buf, "CPU  %u MHz", static_cast<unsigned>(s.cpu.freq_mhz));
+        snprintf(buf, sizeof buf, "%.1f GHz", s.cpu.freq_mhz / 1000.0);
     lv_label_set_text(cpuInfoLabel, buf);
 
     for (size_t i = 0; i < kMaxCores; i++) {
         if (i < s.cpu.core_count) {
+            const int32_t v = static_cast<int32_t>(s.cpu.cores[i] + 0.5f);
             lv_obj_clear_flag(coreBars[i], LV_OBJ_FLAG_HIDDEN);
-            lv_bar_set_value(coreBars[i], static_cast<int32_t>(s.cpu.cores[i] + 0.5f), LV_ANIM_ON);
+            lv_obj_set_style_bg_color(coreBars[i], lv_color_hex(v >= 75 ? kOrange : kCyan), LV_PART_INDICATOR);
+            lv_bar_set_value(coreBars[i], v, LV_ANIM_ON);
         } else {
             lv_obj_add_flag(coreBars[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+    snprintf(buf, sizeof buf, "load #%06X %.2f#  %.2f  %.2f   " LV_SYMBOL_BULLET "   %u threads",
+             static_cast<unsigned>(kText), s.load[0], s.load[1], s.load[2],
+             static_cast<unsigned>(s.cpu.core_count));
+    lv_label_set_text(loadLabel, buf);
 
-    // Memory
+    // Memory: used in full colour, total dimmed.
     fmtBytes(s.mem.used, a, sizeof a);
     fmtBytes(s.mem.total, b, sizeof b);
-    lv_label_set_text_fmt(memLabel, "RAM  %s / %s", a, b);
+    lv_label_set_text_fmt(memLabel, "%s #%06X / %s#", a, static_cast<unsigned>(kTextFaint), b);
     lv_bar_set_value(memBar, pct(s.mem.used, s.mem.total), LV_ANIM_ON);
 
     fmtBytes(s.mem.swap_used, a, sizeof a);
     fmtBytes(s.mem.swap_total, b, sizeof b);
-    lv_label_set_text_fmt(swapLabel, "Swap  %s / %s", a, b);
+    lv_label_set_text_fmt(swapLabel, "%s #%06X / %s#", a, static_cast<unsigned>(kTextFaint), b);
     lv_bar_set_value(swapBar, pct(s.mem.swap_used, s.mem.swap_total), LV_ANIM_ON);
 
+    lv_label_set_text(hostLabel, s.host[0] ? s.host : "-");
     fmtUptime(s.uptime, a, sizeof a);
-    snprintf(buf, sizeof buf, "%s\nUp %s\nLoad %.2f  %.2f  %.2f", s.host, a, s.load[0], s.load[1],
-             s.load[2]);
-    lv_label_set_text(infoLabel, buf);
+    lv_label_set_text(uptimeLabel, a);
 
     // Network
-    lv_label_set_text(netTitle, s.net.iface[0] ? s.net.iface : "Network");
+    if (s.net.iface[0]) {
+        char iface[sizeof s.net.iface];
+        for (size_t i = 0; i < sizeof iface; i++) iface[i] = toupper(static_cast<unsigned char>(s.net.iface[i]));
+        lv_label_set_text(netTitle, iface);
+    } else {
+        lv_label_set_text(netTitle, "NETWORK");
+    }
     fmtBytes(s.net.rx_bps, a, sizeof a);
-    lv_label_set_text_fmt(rxLabel, LV_SYMBOL_DOWNLOAD " %s/s", a);
+    lv_label_set_text_fmt(rxLabel, "%s/s", a);
     fmtBytes(s.net.tx_bps, a, sizeof a);
-    lv_label_set_text_fmt(txLabel, LV_SYMBOL_UPLOAD " %s/s", a);
+    lv_label_set_text_fmt(txLabel, "%s/s", a);
     onNetSample(static_cast<float>(s.net.rx_bps), static_cast<float>(s.net.tx_bps));
 
     // Disks
     for (size_t i = 0; i < kMaxDisks; i++) {
         if (i < s.disk_count) {
             const auto& d = s.disks[i];
+            const uint8_t p = pct(d.used, d.total);
             fmtBytes(d.used, a, sizeof a);
             fmtBytes(d.total, b, sizeof b);
-            lv_label_set_text_fmt(diskLabels[i], LV_SYMBOL_DRIVE " %s  %s / %s", d.mount, a, b);
-            lv_bar_set_value(diskBars[i], pct(d.used, d.total), LV_ANIM_ON);
+            lv_label_set_text(diskLabels[i], d.mount);
+            lv_label_set_text_fmt(diskUseLabels[i], "%s / %s", a, b);
+            lv_obj_set_style_bg_color(diskBars[i], fillColor(p), LV_PART_INDICATOR);
+            lv_bar_set_value(diskBars[i], p, LV_ANIM_ON);
             lv_obj_clear_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
@@ -719,23 +923,36 @@ void setButtons(const ButtonDef* defs, size_t count) {
         lv_obj_set_grid_cell(btn, LV_GRID_ALIGN_STRETCH, i % 4, 1, LV_GRID_ALIGN_STRETCH, i / 4, 1);
         lv_obj_add_event_cb(btn, onButtonClicked, LV_EVENT_CLICKED,
                             reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        lv_obj_set_style_bg_color(btn, lv_color_hex(kCard), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(kCardBorder), 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
+        lv_obj_set_style_radius(btn, 10, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x12303A), LV_STATE_PRESSED);
+        lv_obj_set_style_border_color(btn, lv_color_hex(kCyan), LV_STATE_PRESSED);
+        lv_obj_set_style_color_filter_opa(btn, LV_OPA_TRANSP, LV_STATE_PRESSED);
+        lv_obj_set_style_outline_width(btn, 0, LV_STATE_FOCUS_KEY);
         // Image or icon stacked above the label.
         lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_ver(btn, 4, 0);
-        lv_obj_set_style_pad_row(btn, 4, 0);
+        lv_obj_set_style_pad_row(btn, 6, 0);
 
-        if (slot.def.icon[0] && !slot.def.has_image) {
-            lv_obj_t* icon = lv_label_create(btn);
-            lv_obj_set_style_text_font(icon, &lv_font_montserrat_28, 0);
-            lv_label_set_text(icon, slot.def.icon);
-        }
+        if (slot.def.icon[0] && !slot.def.has_image)
+            makeLabel(btn, &lv_font_montserrat_28, kCyan, slot.def.icon);
 
-        lv_obj_t* label = lv_label_create(btn);
-        lv_label_set_text(label, slot.def.label);
+        lv_obj_t* label = makeLabel(btn, &lv_font_montserrat_14, kText, slot.def.label);
         lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(label, LV_PCT(100));
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    }
+
+    // Faint placeholders fill the rest of the grid.
+    for (size_t i = slotCount; slotCount && i < kMaxButtons; i++) {
+        lv_obj_t* empty = makeRect(buttonGrid, 0, 0, 0x0F141B, 10);
+        lv_obj_set_style_border_color(empty, lv_color_hex(0x171D26), 0);
+        lv_obj_set_style_border_width(empty, 1, 0);
+        lv_obj_set_grid_cell(empty, LV_GRID_ALIGN_STRETCH, i % 4, 1, LV_GRID_ALIGN_STRETCH, i / 4, 1);
     }
 
     if (slotCount) lv_obj_add_flag(noButtonsLabel, LV_OBJ_FLAG_HIDDEN);
@@ -790,11 +1007,10 @@ void setConnected(bool connected) {
 }
 
 void showToast(const char* text, bool ok) {
-    lv_label_set_text(toast, text);
-    lv_obj_set_style_bg_color(
-        toast, ok ? lv_palette_darken(LV_PALETTE_GREEN, 2) : lv_palette_darken(LV_PALETTE_RED, 2), 0);
+    lv_label_set_text(toastLabel, text);
+    lv_obj_set_style_bg_color(toastDot, lv_color_hex(ok ? kGreen : kRed), 0);
+    lv_obj_set_style_border_color(toast, lv_color_hex(ok ? 0x2E6B3A : 0x7A2E2E), 0);
     lv_obj_clear_flag(toast, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -30);
     lv_timer_reset(toastTimer);
     lv_timer_resume(toastTimer);
 }

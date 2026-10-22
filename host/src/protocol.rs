@@ -72,6 +72,9 @@ pub struct Stats {
     pub mem: MemStats,
     pub net: NetStats,
     pub disks: Vec<DiskStats>,
+    /// Left out when the host has no battery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub battery: Option<BatteryStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -106,6 +109,13 @@ pub struct DiskStats {
     pub mount: String,
     pub used: u64,
     pub total: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BatteryStats {
+    /// 0-100.
+    pub percent: u8,
+    pub charging: bool,
 }
 
 #[cfg(test)]
