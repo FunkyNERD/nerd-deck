@@ -124,8 +124,14 @@ systemctl --user enable --now nerd-deck
 
 CI builds both packages on every push (`.github/workflows/host-packages.yml`) and
 keeps them as a run artifact. To cut a release, set the version in
-`host/Cargo.toml`, commit and push, then publish a GitHub release with a matching
-tag such as `v0.2.0`. CI attaches the packages to the release a few minutes later.
+`host/Cargo.toml`, commit, then push a matching tag:
+
+```bash
+git tag v0.2.0 && git push origin main v0.2.0
+```
+
+CI publishes the release with both packages attached. Its notes list every commit
+since the previous tag, grouped by type (`host/packaging/release-notes.sh`).
 To build the packages locally:
 
 ```bash
