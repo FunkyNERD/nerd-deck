@@ -1,4 +1,5 @@
-# Copy to ~/.config/nerd-deck/config.toml
+# nerd-deck writes this to ~/.config/nerd-deck/config.toml on first start if
+# there's no config yet. Restart the service after editing.
 
 [device]
 # port = "/dev/ttyACM0"   # skip auto-detection

@@ -67,11 +67,14 @@ needs for USB discovery.
 ```bash
 cd host
 cargo build --release
-cp config.example.toml ~/.config/nerd-deck/config.toml
 cargo run -- --list-ports   # check the device is visible
 cargo run -- --dump         # print one stats sample
 cargo run                   # connect and stream (RUST_LOG=debug for more)
 ```
+
+On first start the app writes `~/.config/nerd-deck/config.toml` from
+`config.example.toml` (built into the binary). It never overwrites an existing
+config, and it reads the config only at startup, so restart it after editing.
 
 The app finds the device by VID/PID, sends `hello` and the button layout, then
 streams stats. It reconnects automatically if the device is unplugged or reset.
@@ -89,10 +92,8 @@ layout. See `host/config.example.toml` for the icon names.
 host/install.sh
 ```
 
-This builds a release binary and installs it to `~/.local/bin/nerd-deck`. It
-creates `~/.config/nerd-deck/config.toml` from the example (an existing config is
-never overwritten), installs the udev rule from `host/packaging/` (asks for sudo),
-and enables a systemd user service that runs with your graphical session.
+This builds a release binary and installs it to `~/.local/bin/nerd-deck`,
+installs the udev rule from `host/packaging/` (asks for sudo), and enables a systemd user service that runs with your graphical session.
 Re-running it upgrades in place.
 
 | Option | Effect |
@@ -114,11 +115,10 @@ Logs: `journalctl --user -u nerd-deck -f`
 Each release has a `.deb` and an `.rpm` (x86_64, glibc 2.35 or newer: Debian 12+,
 Ubuntu 22.04+, Fedora 36+). They install the binary to `/usr/bin`, the udev rule,
 the systemd user unit and the example config in `/usr/share/doc/nerd-deck/`. The
-service isn't enabled for anyone, so each user sets it up:
+service isn't enabled for anyone, so each user turns it on, and their config is
+created on first start:
 
 ```bash
-mkdir -p ~/.config/nerd-deck
-cp /usr/share/doc/nerd-deck/config.example.toml ~/.config/nerd-deck/config.toml
 systemctl --user enable --now nerd-deck
 ```
 

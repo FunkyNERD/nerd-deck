@@ -9,7 +9,6 @@ fi
 
 cat <<'MSG'
 nerd-deck installed. For each user who wants it:
-    mkdir -p ~/.config/nerd-deck
-    cp /usr/share/doc/nerd-deck/config.example.toml ~/.config/nerd-deck/config.toml
     systemctl --user enable --now nerd-deck
+It creates ~/.config/nerd-deck/config.toml on first start.
 MSG

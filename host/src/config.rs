@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
@@ -10,6 +11,10 @@ use crate::images::{self, ButtonImage};
 const MAX_BUTTONS: usize = 12;
 const MAX_ID_LEN: usize = 23;
 const MAX_LABEL_LEN: usize = 31;
+
+/// Written to the default location on first start, so there's a commented
+/// config to edit.
+const EXAMPLE: &str = include_str!("../config.example.toml");
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -87,7 +92,8 @@ impl Config {
     }
 
     /// Load from `path`, or from the default location if `path` is None.
-    /// A missing default file is not an error; a missing explicit one is.
+    /// A missing default file is created from the example; a missing explicit
+    /// one is an error.
     pub fn load(path: Option<&Path>) -> Result<Self> {
         let (path, explicit) = match path {
             Some(p) => (p.to_path_buf(), true),
@@ -100,8 +106,11 @@ impl Config {
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => {
-                log::warn!("no config at {}, using defaults", path.display());
-                return Ok(Self::default());
+                match write_example(&path) {
+                    Ok(()) => log::info!("created {} from the example", path.display()),
+                    Err(e) => log::warn!("can't create {} ({e}); using the example", path.display()),
+                }
+                EXAMPLE.to_owned()
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
@@ -166,6 +175,18 @@ impl Config {
     }
 }
 
+/// Writes the example config to `path`, never replacing an existing file.
+fn write_example(path: &Path) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(EXAMPLE.as_bytes())
+}
+
 fn resolve_path(config_dir: &Path, path: &Path) -> PathBuf {
     if let (Ok(rest), Some(home)) = (path.strip_prefix("~"), dirs::home_dir()) {
         home.join(rest)
@@ -180,7 +201,7 @@ mod tests {
 
     #[test]
     fn example_config_parses() {
-        let cfg: Config = toml::from_str(include_str!("../config.example.toml")).unwrap();
+        let cfg: Config = toml::from_str(EXAMPLE).unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.device.vid, 0x303a);
         assert!(!cfg.buttons.is_empty());
@@ -202,6 +223,22 @@ mod tests {
     fn rejects_icon_and_image() {
         let toml = "[[button]]\nid='a'\nlabel='A'\ncommand='true'\nicon='mute'\nimage='x.png'";
         assert!(parse(toml).is_err());
+    }
+
+    #[test]
+    fn writes_example_once() {
+        let dir = std::env::temp_dir().join(format!("nerd-deck-config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nerd-deck").join("config.toml");
+
+        write_example(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), EXAMPLE);
+
+        // An existing config is never replaced.
+        std::fs::write(&path, "# mine").unwrap();
+        assert!(write_example(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "# mine");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

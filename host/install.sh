@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and install the nerd-deck host app for the current user.
 #
-#   ./install.sh               build, install binary, config, udev rule, service
+#   ./install.sh               build, install binary, udev rule, service
 #   ./install.sh --no-udev     skip the udev rule (no sudo needed)
 #   ./install.sh --no-service  don't install/enable the systemd user service
 #   ./install.sh --uninstall   remove everything this script installed (config is kept)
@@ -81,16 +81,6 @@ install_binary() {
     esac
 }
 
-install_config() {
-    if [[ -e $CONFIG_DIR/config.toml ]]; then
-        info "Keeping existing $CONFIG_DIR/config.toml"
-    else
-        info "Creating $CONFIG_DIR/config.toml from the example"
-        install -Dm644 "$HOST_DIR/config.example.toml" "$CONFIG_DIR/config.toml"
-        warn "the example config has a Suspend button; edit $CONFIG_DIR/config.toml to taste"
-    fi
-}
-
 install_udev() {
     info "Installing udev rule to $UDEV_RULE (needs sudo)"
     sudo install -m644 "$HOST_DIR/packaging/99-nerd-deck.rules" "$UDEV_RULE"
@@ -115,7 +105,6 @@ fi
 
 check_deps
 install_binary
-install_config
 ((do_udev)) && install_udev
 ((do_service)) && install_service
 
