@@ -107,7 +107,8 @@ button's label can have its own colour (`color = "#FFA726"`). See
 
 The header has a pill per tab: System, Network, Storage, Battery and Controls.
 The open tab's pill shows its name; the others show just an icon. Tap one, or
-swipe between them.
+swipe between them. The order, and the tab the deck opens on, are yours to set
+in the settings window (or `[display]` in the config).
 
 **Storage** shows each disk on a card: how full it is, used of total, and
 what's free. USB drives and SD cards are marked as such.
@@ -147,13 +148,16 @@ app as its notifications arrive (`journalctl --user -u nerd-deck | grep notifica
 `nerd-deck --settings` (or **nerd-deck** in the app menu, or a click on the tray
 icon) opens a window for everything in the config:
 
-- **Device:** the connected deck, its port, serial number, firmware and protocol.
+- **Device:** the connected deck, its port, serial number, firmware and
+  protocol, and display settings kept on the deck: brightness, the tab it opens
+  on, dimming when idle, and turning off when the PC is away.
 - **Buttons:** the Controls tab as a grid. Pick a button to change its label,
   its text colour (presets or any hex colour), its icon (the deck's own
   symbols, searchable), an image from a file, or its command, which **Run
   now** tries on the spot. Add, remove and reorder them.
 - **Stats:** update interval, network interface, battery, and which disks the
   Storage tab shows, in what order.
+- **Deck tabs:** the order of the deck's tabs, with a preview of its header.
 - **Notifications:** on or off, which apps (each app that has sent one is
   listed), message text, Do Not Disturb, low-urgency ones, and test
   notifications for the deck.
@@ -287,13 +291,8 @@ host/packaging/build-packages.sh   # writes host/dist/
 
 ## Next steps
 
-- Add device settings (brightness, starting tab, idle dimming, screen-off
-  timer), kept on the device across reboots. The settings window already shows
-  them, disabled, on its Device page.
 - Drag to reorder buttons and disks in the settings window.
 - Add GPU stats (NVML for NVIDIA, `/sys/class/drm` for AMD).
-- Add a host-driven `brightness` message, and a screen-off timer once the host
-  has been gone for a while.
 - Add multiple button pages.
 - Report IP addresses on the Network tab.
 - Publish the packages to an APT/RPM repository (Forgejo has package

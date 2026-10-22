@@ -1,0 +1,186 @@
+import { Theme, Glyphs } from "../theme.slint";
+import { Backend } from "../backend.slint";
+import { Card, Glyph, SectionTitle, PushButton } from "../widgets.slint";
+
+// A small rounded tag after a tab's name.
+component Tag inherits Rectangle {
+    in property <string> text;
+    in property <color> fg: Theme.text-dim;
+    in property <color> edge: Theme.control-border;
+    horizontal-stretch: 0;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.edge;
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        padding-top: 1px;
+        padding-bottom: 1px;
+        Text {
+            text: root.text;
+            font-size: 11px;
+            font-weight: 600;
+            color: root.fg;
+        }
+    }
+}
+
+// The deck's header in the current order, opened on the first tab.
+component HeaderPreview inherits Rectangle {
+    width: 480px;
+    height: 44px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.sidebar;
+    clip: true;
+    accessible-role: none;
+    HorizontalLayout {
+        y: 0;
+        height: 3px;
+        Rectangle { background: Theme.cyan; }
+        Rectangle { background: Theme.green; }
+        Rectangle { background: Theme.orange; }
+    }
+    HorizontalLayout {
+        x: 8px;
+        y: 7px;
+        height: 34px;
+        spacing: 4px;
+        alignment: start;
+        for tab[i] in Backend.tabs: Rectangle {
+            min-width: 52px;
+            border-radius: 17px;
+            background: i == 0 ? Theme.card : transparent;
+            border-width: 1px;
+            border-color: i == 0 ? Theme.border : transparent;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                alignment: center;
+                Glyph {
+                    text: tab.glyph;
+                    font-size: 15px;
+                    color: i == 0 ? Theme.text : Theme.text-faint;
+                }
+                if i == 0: Text {
+                    text: tab.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+export component TabsPage inherits VerticalLayout {
+    padding: 24px;
+    spacing: 24px;
+    alignment: start;
+
+    SectionTitle { title: "On the deck"; }
+    Card {
+        HorizontalLayout {
+            padding: 16px;
+            spacing: 20px;
+            HeaderPreview { }
+            Text {
+                text: "The deck opens on the first tab, unless Start on (Device) picks another. Swipes go in this order too.";
+                font-size: 12px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        SectionTitle {
+            title: "Tab order";
+            subtitle: "Use a tab's arrows to move it. The deck updates straight away.";
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: end;
+            PushButton {
+                text: "Reset order";
+                clicked => { Backend.reset-tabs(); }
+            }
+        }
+    }
+    Card {
+        VerticalLayout {
+            for tab[i] in Backend.tabs: Rectangle {
+                min-height: 64px;
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    spacing: 14px;
+                    Text {
+                        width: 18px;
+                        text: i + 1;
+                        font-size: 13px;
+                        font-weight: 600;
+                        font-family: Theme.mono;
+                        color: Theme.text-faint;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            border-radius: 18px;
+                            background: Theme.sidebar;
+                            border-width: 1px;
+                            border-color: Theme.border;
+                            Glyph { text: tab.glyph; font-size: 15px; }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            Text { text: tab.name; font-size: 14px; color: Theme.text; vertical-alignment: center; }
+                            if tab.start: Tag { text: "Opens first"; fg: Theme.cyan; edge: #1D5A63; }
+                            if tab.laptop: Tag { text: "Laptops only"; }
+                        }
+                        Text { text: tab.desc; font-size: 12px; color: Theme.text-dim; overflow: elide; }
+                    }
+                    PushButton {
+                        icon: Glyphs.up;
+                        flat: true;
+                        enabled: i > 0;
+                        accessible-label: "Move " + tab.name + " up";
+                        clicked => { Backend.move-tab(i, -1); }
+                    }
+                    PushButton {
+                        icon: Glyphs.down;
+                        flat: true;
+                        enabled: i + 1 < Backend.tabs.length;
+                        accessible-label: "Move " + tab.name + " down";
+                        clicked => { Backend.move-tab(i, 1); }
+                    }
+                }
+                if i + 1 < Backend.tabs.length: Rectangle {
+                    x: 0;
+                    y: parent.height - 1px;
+                    width: parent.width;
+                    height: 1px;
+                    background: Theme.border;
+                }
+            }
+        }
+    }
+}

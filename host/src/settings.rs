@@ -45,7 +45,25 @@ const INTERVALS: [(u64, &str); 4] =
 const MAX_DISKS: usize = 4;
 
 /// Sections, in sidebar order, by the names `--page` takes.
-const PAGES: [&str; 6] = ["device", "buttons", "stats", "notifications", "firmware", "about"];
+const PAGES: [&str; 7] = ["device", "buttons", "stats", "tabs", "notifications", "firmware", "about"];
+
+/// The choices offered for `display.dim_after`, in minutes.
+const DIM_AFTER: [(u32, &str); 5] =
+    [(0, "Never"), (1, "After 1 minute"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes")];
+
+/// The deck's tabs for the Deck tabs page: name, what's on it, Font Awesome glyph.
+fn tab_info(id: &str) -> (&'static str, &'static str, &'static str) {
+    match id {
+        "system" => ("System", "CPU, memory, uptime and per-core load", "\u{f015}"),
+        "network" => ("Network", "Download and upload rates, with a traffic graph", "\u{f1eb}"),
+        "storage" => ("Storage", "How full each disk is, USB drives included", "\u{f0a0}"),
+        "battery" => ("Battery", "Charge, power draw, health and the charge limit", "\u{f240}"),
+        _ => ("Controls", "Your buttons", "\u{f11c}"),
+    }
+}
+
+/// The deck's protocol version that added the `display` message.
+const DISPLAY_PROTO: i32 = 6;
 
 pub fn run(config_path: Option<PathBuf>, page: Option<&str>) -> Result<()> {
     let bus = Connection::session().context("connecting to the session bus")?;
@@ -404,6 +422,52 @@ impl State {
         rows
     }
 
+    // ---- Display ----
+
+    fn refresh_display(&self, ui: &SettingsWindow) {
+        let b = ui.global::<Backend>();
+        let d = &self.cfg.display;
+        let order = d.tab_order();
+        b.set_brightness(d.brightness.into());
+
+        let first = tab_info(order[0]).0;
+        let starts: Vec<SharedString> = std::iter::once(format!("First tab ({first})"))
+            .chain(config::TABS.iter().map(|t| tab_info(t).0.to_owned()))
+            .map(Into::into)
+            .collect();
+        b.set_start_options(ModelRc::new(VecModel::from(starts)));
+        let start = config::TABS.iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
+        b.set_start_index(start as i32);
+
+        let mut dims: Vec<SharedString> = DIM_AFTER.iter().map(|(_, l)| (*l).into()).collect();
+        let index = match DIM_AFTER.iter().position(|(m, _)| *m == d.dim_after) {
+            Some(i) => i,
+            None => {
+                dims.push(format!("After {} minutes", d.dim_after).into());
+                dims.len() - 1
+            }
+        };
+        b.set_dim_options(ModelRc::new(VecModel::from(dims)));
+        b.set_dim_index(index as i32);
+        b.set_off_when_away(d.off_when_away);
+
+        let opens = if d.start == "first" { order[0] } else { d.start.as_str() };
+        let rows: Vec<TabRow> = order
+            .iter()
+            .map(|id| {
+                let (name, desc, glyph) = tab_info(id);
+                TabRow {
+                    name: name.into(),
+                    desc: desc.into(),
+                    glyph: glyph.into(),
+                    start: *id == opens,
+                    laptop: *id == "battery",
+                }
+            })
+            .collect();
+        b.set_tabs(ModelRc::new(VecModel::from(rows)));
+    }
+
     // ---- Notifications ----
 
     /// Apps that have sent notifications, then any the config names that haven't.
@@ -492,6 +556,8 @@ impl State {
             })
             .collect();
         b.set_apps(ModelRc::new(VecModel::from(apps)));
+
+        self.refresh_display(ui);
 
         b.set_auto_firmware(cfg.updates.firmware);
         b.set_check_updates(cfg.updates.check);
@@ -728,6 +794,7 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     b.set_version(if s.version.is_empty() { env!("CARGO_PKG_VERSION").into() } else { s.version }.into());
     b.set_update(s.update.into());
     b.set_flashing(s.flashing);
+    b.set_display_unsupported(s.connected && (s.proto as i32) < DISPLAY_PROTO);
 }
 
 /// Follow the service's status: its signal, plus a slow poll.
@@ -1007,6 +1074,48 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         st.set_list("stats", "mounts", &mounts);
         st.save(&ui);
         ui.global::<Backend>().set_disks(ModelRc::new(VecModel::from(st.disk_rows())));
+    });
+
+    // ---- Display ----
+    {
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        b.on_set_brightness(move |percent| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let percent = percent.clamp(5, 100);
+            st.set("display", "brightness", percent as i64);
+            ui.global::<Backend>().set_brightness(percent);
+            // The slider sends a value per step; save once it settles.
+            st.save_later(&ui, &state);
+        });
+    }
+    on!(on_set_start, |ui, st, index| {
+        let start = if index <= 0 { "first" } else { config::TABS.get(index as usize - 1).copied().unwrap_or("first") };
+        st.set("display", "start", start);
+        st.save(&ui);
+        st.refresh_display(&ui);
+    });
+    on!(on_set_dim, |ui, st, index| {
+        let Some((minutes, _)) = DIM_AFTER.get(index as usize) else { return };
+        st.set("display", "dim_after", *minutes as i64);
+        st.save(&ui);
+    });
+    on!(on_move_tab, |ui, st, index, delta| {
+        let mut order: Vec<String> = st.cfg.display.tab_order().iter().map(|t| (*t).to_owned()).collect();
+        let (from, to) = (index as usize, (index + delta) as usize);
+        if to >= order.len() {
+            return;
+        }
+        order.swap(from, to);
+        st.set_list("display", "tabs", &order);
+        st.save(&ui);
+        st.refresh_display(&ui);
+    });
+    on!(on_reset_tabs, |ui, st| {
+        st.remove("display", "tabs");
+        st.save(&ui);
+        st.refresh_display(&ui);
     });
 
     // ---- Switches ----

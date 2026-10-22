@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "config.hpp"
+#include "settings.hpp"
 #include "stats.hpp"
 #include "ui/ui.hpp"
 
@@ -145,6 +146,35 @@ void handleNotification(JsonObjectConst o) {
     ui::showNotification(o["app"] | "", o["summary"] | "", o["body"] | "", o["critical"] | false);
 }
 
+// Missing or unknown fields keep the stored values; tabs left out of `tabs`
+// follow in their default order.
+void handleDisplay(JsonObjectConst o) {
+    using namespace settings;
+    Display d = load();
+    JsonArrayConst tabs = o["tabs"];
+    if (!tabs.isNull()) {
+        bool placed[kTabCount] = {};
+        uint8_t n = 0;
+        for (const char* id : tabs) {
+            const int8_t t = id ? tabFromName(id) : -1;
+            if (t < 0 || placed[t] || n == kTabCount) continue;
+            placed[t] = true;
+            d.tabs[n++] = static_cast<uint8_t>(t);
+        }
+        for (uint8_t t = 0; t < kTabCount; t++)
+            if (!placed[t]) d.tabs[n++] = t;
+    }
+    if (const char* start = o["start"]) {
+        const int8_t t = tabFromName(start);
+        d.start = t >= 0 ? t : kStartFirst;
+    }
+    if (o["brightness"].is<int>()) d.brightness = constrain(o["brightness"].as<int>(), 5, 100);
+    if (o["dim_after"].is<uint32_t>()) d.dimAfterS = o["dim_after"].as<uint32_t>();
+    if (o["off_when_away"].is<bool>()) d.offWhenAway = o["off_when_away"].as<bool>();
+    save(d);
+    ui::applyDisplay(d);
+}
+
 void handleLine(const char* line, size_t len) {
     JsonDocument doc;
     if (deserializeJson(doc, line, len)) return;  // ignore garbage / partial lines
@@ -164,6 +194,8 @@ void handleLine(const char* line, size_t len) {
         handleAck(o);
     } else if (strcmp(type, "notify") == 0) {
         handleNotify(o);
+    } else if (strcmp(type, "display") == 0) {
+        handleDisplay(o);
     } else if (strcmp(type, "notification") == 0) {
         handleNotification(o);
     } else if (strcmp(type, "hello") == 0) {

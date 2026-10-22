@@ -9,12 +9,13 @@ import { Glyph, PushButton } from "widgets.slint";
 import { DevicePage } from "pages/device.slint";
 import { ButtonsPage } from "pages/buttons.slint";
 import { StatsPage } from "pages/stats.slint";
+import { TabsPage } from "pages/tabs.slint";
 import { NotificationsPage } from "pages/notifications.slint";
 import { FirmwarePage } from "pages/firmware.slint";
 import { AboutPage } from "pages/about.slint";
 
 export { Backend }
-export { DeckButton, IconChoice, Swatch, DiskRow, AppRow, KnownDeck } from "backend.slint";
+export { DeckButton, IconChoice, Swatch, DiskRow, TabRow, AppRow, KnownDeck } from "backend.slint";
 
 component NavItem inherits Rectangle {
     in property <string> glyph;
@@ -67,8 +68,8 @@ export component SettingsWindow inherits Window {
 
     // The standard widgets (fields, menus, Slint's credit) follow the window's dark look.
     init => { Palette.color-scheme = ColorScheme.dark; }
-    property <[string]> titles: ["Device", "Buttons", "Stats", "Notifications", "Firmware & updates", "About"];
-    property <[string]> glyphs: [Glyphs.desktop, Glyphs.grid, Glyphs.chart, Glyphs.bell, Glyphs.chip, Glyphs.info];
+    property <[string]> titles: ["Device", "Buttons", "Stats", "Deck tabs", "Notifications", "Firmware & updates", "About"];
+    property <[string]> glyphs: [Glyphs.desktop, Glyphs.grid, Glyphs.chart, Glyphs.tabs, Glyphs.bell, Glyphs.chip, Glyphs.info];
 
     HorizontalLayout {
         // Sidebar
@@ -214,17 +215,22 @@ export component SettingsWindow inherits Window {
             if root.page == 3: s3 := ScrollView {
                 content-width: self.visible-width;
                 content-height: p3.preferred-height;
-                p3 := NotificationsPage { width: s3.visible-width; }
+                p3 := TabsPage { width: s3.visible-width; }
             }
             if root.page == 4: s4 := ScrollView {
                 content-width: self.visible-width;
                 content-height: p4.preferred-height;
-                p4 := FirmwarePage { width: s4.visible-width; }
+                p4 := NotificationsPage { width: s4.visible-width; }
             }
             if root.page == 5: s5 := ScrollView {
                 content-width: self.visible-width;
                 content-height: p5.preferred-height;
-                p5 := AboutPage { width: s5.visible-width; }
+                p5 := FirmwarePage { width: s5.visible-width; }
+            }
+            if root.page == 6: s6 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p6.preferred-height;
+                p6 := AboutPage { width: s6.visible-width; }
             }
         }
     }

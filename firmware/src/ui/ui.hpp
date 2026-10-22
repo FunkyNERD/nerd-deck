@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "settings.hpp"
 #include "stats.hpp"
 
 namespace ui {
@@ -9,6 +10,9 @@ namespace ui {
 // Build the tab view (System / Network / Storage / Battery / Controls). Call after display::init().
 void init();
 
+// Tab order, the tab to open on, brightness and power saving. Call once at
+// start with the stored settings, then for each `display` message.
+void applyDisplay(const settings::Display& d);
 void updateStats(const HostStats& s);
 void setButtons(const ButtonDef* defs, size_t count);
 // One chunk of a button image in LV_IMG_CF_TRUE_COLOR_ALPHA (3 bytes/px).

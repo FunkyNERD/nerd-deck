@@ -8,7 +8,7 @@
 #define FW_BOARD "wt32-sc01-plus"
 
 // Bump together with PROTO_VERSION in host/src/protocol.rs.
-constexpr uint32_t kProtoVersion = 5;
+constexpr uint32_t kProtoVersion = 6;
 
 constexpr int kScreenWidth = 480;
 constexpr int kScreenHeight = 320;

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump together with `kProtoVersion` in firmware/src/config.hpp.
-pub const PROTO_VERSION: u32 = 5;
+pub const PROTO_VERSION: u32 = 6;
 
 /// Messages the host sends to the device.
 #[derive(Debug, Serialize)]
@@ -37,6 +37,18 @@ pub enum HostMsg {
         /// Stays up until tapped.
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         critical: bool,
+    },
+    /// Settings the deck keeps: tab order, the tab it opens on, brightness and
+    /// power saving. Added in v6.
+    Display {
+        tabs: Vec<&'static str>,
+        /// A tab's name, or "first".
+        start: String,
+        /// Percent.
+        brightness: u8,
+        /// Seconds untouched before dimming; 0 never.
+        dim_after: u32,
+        off_when_away: bool,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.

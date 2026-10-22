@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "display.hpp"
 #include "protocol.hpp"
+#include "settings.hpp"
 #include "ui/ui.hpp"
 
 void setup() {
@@ -16,6 +17,7 @@ void setup() {
 
     display::init();
     ui::init();
+    ui::applyDisplay(settings::load());
     protocol::init();
 }
 

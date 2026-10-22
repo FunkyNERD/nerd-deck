@@ -15,6 +15,15 @@ mounts = ["/", "/home"]   # the device shows up to 4
 removable = true          # also show USB drives / SD cards while mounted
 battery = true            # show the battery in the header, on PCs that have one
 
+[display]
+# Kept on the deck too, so they apply from power-on.
+brightness = 80           # percent, 5-100
+start = "first"           # the tab the deck opens on: "first", or a tab's name
+# tabs = ["system", "network", "storage", "battery", "controls"]   # tab order;
+#                         # tabs left out follow in this order. Battery only shows on PCs with one.
+dim_after = 0             # minutes untouched before the screen dims; 0 = never
+off_when_away = false     # screen off after 10 minutes on the waiting screen
+
 [updates]
 check = true              # look for a newer release daily and show a notice on the device
 firmware = true           # install this release's device firmware when the device's is older

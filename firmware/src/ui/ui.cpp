@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "config.hpp"
+#include "display.hpp"
 #include "protocol.hpp"
 
 namespace ui {
@@ -49,11 +50,30 @@ constexpr const char* kTabIcons[kTabCount] = {LV_SYMBOL_HOME, LV_SYMBOL_WIFI, LV
                                               LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
 constexpr const char* kTabNames[kTabCount] = {"System", "Network", "Storage", "Battery", "Controls"};
 lv_obj_t* tabview;
+static_assert(kTabCount == settings::kTabCount, "Tab follows settings::kTabIds");
+lv_obj_t* tabPages[kTabCount];
 lv_obj_t* tabPills[kTabCount];
 lv_obj_t* tabPillIcons[kTabCount];
 lv_obj_t* tabPillNames[kTabCount];
 uint16_t currentTab = kTabSystem;
 bool hasBattery = false;
+// The tab at each position, and each tab's position: the tabview's pages and
+// the header's pills are both kept in this order, so swipes follow it.
+uint8_t tabAt[kTabCount] = {kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls};
+uint8_t tabPos[kTabCount] = {0, 1, 2, 3, 4};
+int8_t startTab = settings::kStartFirst;
+// Once someone picks a tab, the start tab no longer moves them.
+bool userNavigated = false;
+
+// Power saving: the backlight dims when untouched for a while, and goes off
+// when the host has been away long enough.
+constexpr uint32_t kAwayOffMs = 10 * 60 * 1000;
+constexpr uint8_t kDimPercent = 20;
+uint8_t brightness = 80;  // percent, as set
+uint32_t dimAfterMs = 0;  // 0 = never
+bool offWhenAway = false;
+uint8_t litPercent = 0xFF;  // what the backlight is at now
+lv_obj_t* wakeCatcher;     // takes the tap that wakes a dimmed screen
 lv_obj_t* batteryBox;
 lv_obj_t* batteryBolt;
 lv_obj_t* batteryFill;
@@ -309,24 +329,82 @@ void styleTabPills() {
 
 void openTab(uint16_t tab, lv_anim_enable_t anim) {
     currentTab = tab;
-    lv_tabview_set_act(tabview, tab, anim);
+    lv_tabview_set_act(tabview, tabPos[tab], anim);
     styleTabPills();
 }
 
+// The tab to open on: the start tab, or the first in order, but never a
+// Battery tab that isn't shown.
+uint16_t startingTab() {
+    const auto shown = [](int t) { return t >= 0 && (t != kTabBattery || hasBattery); };
+    if (shown(startTab)) return startTab;
+    return shown(tabAt[0]) ? tabAt[0] : tabAt[1];
+}
+
 void onTabPill(lv_event_t* e) {
+    userNavigated = true;
     openTab(static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e))), LV_ANIM_ON);
 }
 
 // After a swipe. Without a battery, its tab is skipped in the swipe's direction.
 void onTabSwiped(lv_event_t*) {
-    uint16_t tab = lv_tabview_get_tab_act(tabview);
+    const uint16_t pos = lv_tabview_get_tab_act(tabview);
+    uint16_t tab = tabAt[pos];
     if (tab == currentTab) return;
-    if (tab == kTabBattery && !hasBattery) tab = tab > currentTab ? kTabControls : kTabStorage;
-    if (tab != lv_tabview_get_tab_act(tabview)) openTab(tab, LV_ANIM_ON);
+    userNavigated = true;
+    if (tab == kTabBattery && !hasBattery) {
+        const int step = pos > tabPos[currentTab] ? 1 : -1;
+        const int next = pos + step;
+        tab = tabAt[next >= 0 && next < kTabCount ? next : pos - step];
+    }
+    if (tabPos[tab] != pos) openTab(tab, LV_ANIM_ON);
     else {
         currentTab = tab;
         styleTabPills();
     }
+}
+
+// Puts the pages and pills in `order`, keeping the open tab open.
+void setTabOrder(const uint8_t* order) {
+    for (uint8_t pos = 0; pos < kTabCount; pos++) {
+        tabAt[pos] = order[pos];
+        tabPos[order[pos]] = pos;
+        lv_obj_move_to_index(tabPages[order[pos]], pos);
+        lv_obj_move_to_index(tabPills[order[pos]], pos);
+    }
+    lv_obj_update_layout(tabview);
+    lv_tabview_set_act(tabview, tabPos[currentTab], LV_ANIM_OFF);
+}
+
+// Sets the backlight for how long the screen has been untouched.
+void powerTick(lv_timer_t*) {
+    const uint32_t idle = lv_disp_get_inactive_time(nullptr);
+    uint8_t target = brightness;
+    if (offWhenAway && waitShown && idle >= kAwayOffMs) target = 0;
+    else if (dimAfterMs && idle >= dimAfterMs) target = brightness < kDimPercent ? brightness : kDimPercent;
+    if (target != litPercent) {
+        litPercent = target;
+        display::setBrightness(static_cast<uint8_t>(target * 255 / 100));
+    }
+    if (target < brightness) lv_obj_clear_flag(wakeCatcher, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(wakeCatcher, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Wakes a dimmed or dark screen, as a touch would.
+void wake() {
+    lv_disp_trig_activity(nullptr);
+    powerTick(nullptr);
+}
+
+void buildPower() {
+    // Over everything while dimmed, so the tap that wakes the screen doesn't
+    // also press whatever is under it.
+    wakeCatcher = lv_obj_create(lv_layer_sys());
+    lv_obj_remove_style_all(wakeCatcher);
+    lv_obj_set_size(wakeCatcher, kScreenWidth, kScreenHeight);
+    lv_obj_add_flag(wakeCatcher, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(wakeCatcher, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_create(powerTick, 200, nullptr);
 }
 
 // Tab pills on the left of the header, the stripe above them, and the battery
@@ -1164,7 +1242,8 @@ void showBatteryTab(bool show) {
     hasBattery = show;
     if (show) lv_obj_clear_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
-    if (!show && currentTab == kTabBattery) openTab(kTabSystem, LV_ANIM_OFF);
+    if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);  // it may be the start tab
+    else if (!show && currentTab == kTabBattery) openTab(startingTab(), LV_ANIM_OFF);
 }
 
 void updateBattery(const HostStats& s) {
@@ -1401,7 +1480,7 @@ void init() {
     lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
 
     // In Tab order.
-    lv_obj_t* tabs[kTabCount];
+    lv_obj_t** tabs = tabPages;
     for (uint16_t i = 0; i < kTabCount; i++) {
         tabs[i] = lv_tabview_add_tab(tabview, kTabNames[i]);
         lv_obj_set_style_pad_all(tabs[i], kGap, 0);
@@ -1414,10 +1493,22 @@ void init() {
     buildBatteryTab(tabs[kTabBattery]);
     buildControlsTab(tabs[kTabControls]);
     buildOverlays();
+    buildPower();
 #ifdef NERD_START_TAB
     // Debug: open on a given tab (0 System, 1 Network, 2 Storage, 3 Battery, 4 Controls).
+    userNavigated = true;
     openTab(NERD_START_TAB, LV_ANIM_OFF);
 #endif
+}
+
+void applyDisplay(const settings::Display& d) {
+    setTabOrder(d.tabs);
+    startTab = d.start;
+    if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);
+    brightness = d.brightness;
+    dimAfterMs = d.dimAfterS * 1000;
+    offWhenAway = d.offWhenAway;
+    powerTick(nullptr);
 }
 
 void updateStats(const HostStats& s) {
@@ -1651,6 +1742,7 @@ void buttonTileSize(uint16_t* w, uint16_t* h) {
 void setConnected(bool connected) {
     if (connected != waitShown) return;
     waitShown = !connected;
+    wake();  // the away timer starts now; a returning host lights the screen
     if (connected) {
         hideWaitScreen();
     } else {
@@ -1752,6 +1844,7 @@ void showAlert(const char* app, const char* summary, const char* body) {
 }  // namespace
 
 void showNotification(const char* app, const char* summary, const char* body, bool critical) {
+    wake();
     if (critical) showAlert(app, summary, body);
     else showCard(app, summary, body);
 }

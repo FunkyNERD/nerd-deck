@@ -21,6 +21,7 @@ pub const EXAMPLE: &str = include_str!("../config.example.toml");
 pub struct Config {
     pub device: DeviceConfig,
     pub stats: StatsConfig,
+    pub display: DisplayConfig,
     pub updates: UpdatesConfig,
     pub notifications: NotificationsConfig,
     #[serde(rename = "button")]
@@ -46,6 +47,72 @@ impl Default for DeviceConfig {
             pid: Some(0x1001),
             baud: 115_200,
         }
+    }
+}
+
+/// The deck's tabs, by the names `display.tabs` and `display.start` take, in
+/// their default order.
+pub const TABS: [&str; 5] = ["system", "network", "storage", "battery", "controls"];
+
+/// Settings the deck keeps, so they apply from power-on.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DisplayConfig {
+    /// Backlight, 5-100 percent.
+    pub brightness: u8,
+    /// The tab the deck opens on: one of TABS, or "first" for the first in `tabs`.
+    pub start: String,
+    /// Tab order. Tabs it leaves out follow, in their default order.
+    pub tabs: Vec<String>,
+    /// Minutes untouched before the screen dims; 0 never dims.
+    pub dim_after: u32,
+    /// Turn the screen off after 10 minutes on the waiting screen.
+    pub off_when_away: bool,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            brightness: 80,
+            start: "first".into(),
+            tabs: Vec::new(),
+            dim_after: 0,
+            off_when_away: false,
+        }
+    }
+}
+
+impl DisplayConfig {
+    /// Every tab, in the configured order.
+    pub fn tab_order(&self) -> Vec<&'static str> {
+        let mut order: Vec<&'static str> =
+            self.tabs.iter().filter_map(|t| TABS.iter().find(|n| **n == t.as_str()).copied()).collect();
+        for t in TABS {
+            if !order.contains(&t) {
+                order.push(t);
+            }
+        }
+        order
+    }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            (5..=100).contains(&self.brightness),
+            "display.brightness must be 5-100, not {}",
+            self.brightness
+        );
+        ensure!(
+            self.start == "first" || TABS.contains(&self.start.as_str()),
+            "display.start {:?} isn't \"first\" or a tab: {}",
+            self.start,
+            TABS.join(", ")
+        );
+        let mut seen = std::collections::HashSet::new();
+        for t in &self.tabs {
+            ensure!(TABS.contains(&t.as_str()), "display.tabs: unknown tab {t:?}; the tabs are {}", TABS.join(", "));
+            ensure!(seen.insert(t), "display.tabs lists {t:?} twice");
+        }
+        Ok(())
     }
 }
 
@@ -181,6 +248,7 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.display.validate()?;
         ensure!(
             self.buttons.len() <= MAX_BUTTONS,
             "{} buttons configured; the device shows at most {MAX_BUTTONS}",
@@ -290,6 +358,18 @@ mod tests {
         assert_eq!(parse_color("ffffff"), Some(0xFFFFFF));
         assert_eq!(parse_color("#fff"), None);
         assert!(parse("[[button]]\nid='a'\nlabel='A'\ncommand='true'\ncolor='red'").is_err());
+    }
+
+    #[test]
+    fn display_tabs_fill_in_and_validate() {
+        let cfg = parse("[display]\ntabs = ['controls', 'system']").unwrap();
+        assert_eq!(cfg.display.tab_order(), ["controls", "system", "network", "storage", "battery"]);
+        assert_eq!(Config::default().display.tab_order(), TABS);
+        assert!(parse("[display]\ntabs = ['system', 'system']").is_err());
+        assert!(parse("[display]\ntabs = ['nope']").is_err());
+        assert!(parse("[display]\nstart = 'nope'").is_err());
+        assert!(parse("[display]\nstart = 'battery'").is_ok());
+        assert!(parse("[display]\nbrightness = 2").is_err());
     }
 
     #[test]

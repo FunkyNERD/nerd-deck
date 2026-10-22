@@ -1,4 +1,4 @@
-# nerd-deck wire protocol (v5)
+# nerd-deck wire protocol (v6)
 
 Transport: USB CDC serial (ESP32-S3 USB-Serial-JTAG, `303a:1001`). Baud is
 ignored on native USB.
@@ -120,6 +120,27 @@ showing. The host sends ASCII only, since the device's fonts have nothing else.
 {"type":"notification","app":"Thunderbird","summary":"Server certificate expired","critical":true}
 ```
 
+### `display`
+Settings the device keeps in flash, so they apply from power-on, before the host
+connects. Sent after the device's `hello` and whenever they change. Added in v6.
+```json
+{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_when_away":true}
+```
+- `tabs`: the tab order, by `system`, `network`, `storage`, `battery` and
+  `controls`. The pills in the header and swiping both follow it. Tabs left out
+  follow in that order; unknown names are skipped. Battery only shows when
+  `stats` has a battery.
+- `start`: the tab the device opens on, or `first` for the first in `tabs`. If
+  it's `battery` and there's no battery, the first tab instead. It only moves
+  the device to that tab until someone picks one.
+- `brightness`: backlight percent, 5-100.
+- `dim_after`: seconds untouched before the backlight dims to 20%; 0 never
+  dims. The tap that wakes it doesn't press anything.
+- `off_when_away`: backlight off after 10 minutes on the waiting screen. A
+  touch, a notification or the host coming back wakes it.
+
+Fields left out keep the device's stored values.
+
 ## Device → host
 
 ### `hello`
@@ -157,3 +178,5 @@ command for it. The device never sends a command string.
   device answers each `image` with its own, so the host paces them. Buttons
   add `color`. `stats`
   adds battery power, time left, capacity and health for the battery screen.
+- **v6**: adds the `display` message: tab order, start tab, brightness and
+  power saving.

@@ -37,6 +37,16 @@ export struct DiskRow {
     on: bool,
 }
 
+export struct TabRow {
+    name: string,
+    desc: string,
+    glyph: string,
+    // Where the deck opens.
+    start: bool,
+    // Only shown on PCs with a battery.
+    laptop: bool,
+}
+
 export struct AppRow {
     name: string,
     app-id: string,
@@ -100,10 +110,26 @@ export global Backend {
     callback set-disk(int, bool);
     callback move-disk(int, int);
 
+    // Display, kept on the deck
+    in property <int> brightness;
+    in property <[string]> start-options;
+    in-out property <int> start-index;
+    in property <[string]> dim-options;
+    in-out property <int> dim-index;
+    in property <bool> off-when-away;
+    // Connected to firmware too old for these.
+    in property <bool> display-unsupported;
+    callback set-brightness(int);
+    callback set-start(int);
+    callback set-dim(int);
+    in property <[TabRow]> tabs;
+    callback move-tab(int, int);
+    callback reset-tabs();
+
     // Switches, set through set-flag with these keys: "stats.removable",
     // "stats.battery", "notifications.enabled", "notifications.all",
     // "notifications.body", "notifications.dnd", "notifications.skip_low",
-    // "updates.firmware", "updates.check".
+    // "updates.firmware", "updates.check", "display.off_when_away".
     in property <bool> removable;
     in property <bool> battery;
     in property <bool> notify-enabled;

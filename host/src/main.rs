@@ -311,6 +311,7 @@ impl Host {
                             if device_changed {
                                 return Ok(SessionEnd::Reconnect);
                             }
+                            send_display(&self.cfg, &mut conn)?;
                             send_buttons(&self.cfg, &mut conn, tile)?;
                         }
                         Err(e) => {
@@ -435,7 +436,8 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
             if proto != PROTO_VERSION {
                 log::warn!("protocol mismatch: host v{PROTO_VERSION}, device v{proto}");
             }
-            // Device may have rebooted; resend its layout.
+            // Device may have rebooted; resend its settings and layout.
+            send_display(cfg, conn)?;
             send_buttons(cfg, conn, tile)?;
         }
         DeviceMsg::Press { id } => {
@@ -459,6 +461,17 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
         DeviceMsg::Unknown => log::debug!("ignoring unknown device message"),
     }
     Ok(())
+}
+
+fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
+    let d = &cfg.display;
+    conn.send(&HostMsg::Display {
+        tabs: d.tab_order(),
+        start: d.start.clone(),
+        brightness: d.brightness,
+        dim_after: d.dim_after * 60,
+        off_when_away: d.off_when_away,
+    })
 }
 
 /// Sends the layout, then each button's image: filling a `tile` (width,

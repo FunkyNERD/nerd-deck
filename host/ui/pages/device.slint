@@ -183,47 +183,64 @@ export component DevicePage inherits VerticalLayout {
 
     SectionTitle {
         title: "Display";
-        subtitle: "Coming with a later deck firmware. They'll be kept on the deck, so they survive a reboot.";
+        subtitle: Backend.display-unsupported
+            ? "The deck's firmware is too old for these; they apply once it's updated."
+            : "Kept on the deck, so they survive a reboot.";
     }
     Card {
         VerticalLayout {
             SettingRow {
                 title: "Brightness";
-                enabled: false;
-                Slider {
-                    width: 220px;
-                    minimum: 5;
-                    maximum: 100;
-                    value: 100;
-                    enabled: false;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Slider {
+                        width: 220px;
+                        minimum: 5;
+                        maximum: 100;
+                        value: Backend.brightness;
+                        changed(v) => { Backend.set-brightness(round(v)); }
+                    }
+                    Text {
+                        width: 40px;
+                        text: Backend.brightness + "%";
+                        font-size: 13px;
+                        color: Theme.text-dim;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
                 }
             }
             SettingRow {
                 title: "Start on";
-                subtitle: "The tab the deck opens on";
-                enabled: false;
-                Segmented {
-                    options: ["System", "Network", "Controls"];
-                    current: 0;
-                    enabled: false;
+                subtitle: Backend.start-index == 0 ? "Follows the order on Deck tabs"
+                    : Backend.start-index == 4 ? "The first tab instead on PCs without a battery"
+                    : "The tab the deck opens on, wherever it is in the order";
+                ComboBox {
+                    width: 200px;
+                    model: Backend.start-options;
+                    current-index <=> Backend.start-index;
+                    selected => { Backend.set-start(self.current-index); }
                 }
             }
             SettingRow {
                 title: "Dim when idle";
-                subtitle: "Lowers brightness until the screen is touched";
-                enabled: false;
+                subtitle: "Lowers brightness to 20% until the screen is touched";
                 ComboBox {
-                    width: 180px;
-                    model: ["Never", "After 5 minutes", "After 15 minutes"];
-                    enabled: false;
+                    width: 200px;
+                    model: Backend.dim-options;
+                    current-index <=> Backend.dim-index;
+                    selected => { Backend.set-dim(self.current-index); }
                 }
             }
             SettingRow {
                 title: "Turn off when the PC is away";
-                subtitle: "After 10 minutes on the waiting screen";
-                enabled: false;
+                subtitle: "After 10 minutes on the waiting screen. A touch wakes it.";
                 last: true;
-                Toggle { checked: false; enabled: false; label: "Turn off when the PC is away"; }
+                Toggle {
+                    label: "Turn off when the PC is away";
+                    checked: Backend.off-when-away;
+                    toggled(on) => { Backend.set-flag("display.off_when_away", on); }
+                }
             }
         }
     }
