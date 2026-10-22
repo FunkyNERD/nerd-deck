@@ -3,6 +3,13 @@
 A USB desk display for a Linux PC: live CPU, memory, network and disk stats on a
 WT32-SC01 Plus, plus a page of touch buttons that run commands on the PC.
 
+| | |
+|---|---|
+| ![System tab: CPU gauge, RAM and swap, host, uptime and per-core load](docs/images/system.jpg) | ![Network tab: download and upload rates, traffic graph and disk usage](docs/images/network.jpg) |
+| **System:** CPU, memory, uptime and per-core load, with the laptop's battery in the corner. | **Network:** live traffic and disks, including drives as you plug them in. |
+| ![Controls tab: a grid of touch buttons with icons](docs/images/controls.jpg) | ![Waiting screen: the nerd-deck logo with a "Waiting for host" status](docs/images/waiting.jpg) |
+| **Controls:** buttons that run commands on the PC. | **Waiting:** shown until the host app connects. |
+
 ```
 ┌──────────────── PC (Linux) ────────────────┐        USB-C        ┌──── WT32-SC01 Plus (ESP32-S3) ────┐
 │ host/  (Rust)                              │  newline-delimited  │ firmware/  (PlatformIO / Arduino) │
