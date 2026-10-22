@@ -10,7 +10,7 @@ namespace {
 constexpr const char* kNamespace = "nerd-deck";
 constexpr const char* kKey = "display";
 // Bump when Display's layout changes; a stored copy of another layout is ignored.
-constexpr uint8_t kLayout = 1;
+constexpr uint8_t kLayout = 2;
 
 struct Stored {
     uint8_t layout;
@@ -23,7 +23,7 @@ Display defaults() {
     d.start = kStartFirst;
     d.brightness = 80;
     d.dimAfterS = 0;
-    d.offWhenAway = false;
+    d.offAfterS = 0;
     return d;
 }
 

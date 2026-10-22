@@ -48,7 +48,8 @@ pub enum HostMsg {
         brightness: u8,
         /// Seconds untouched before dimming; 0 never.
         dim_after: u32,
-        off_when_away: bool,
+        /// Seconds on the waiting screen before the screen turns off; 0 never.
+        off_after: u32,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.

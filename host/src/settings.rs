@@ -51,6 +51,32 @@ const PAGES: [&str; 7] = ["device", "buttons", "stats", "tabs", "notifications",
 const DIM_AFTER: [(u32, &str); 5] =
     [(0, "Never"), (1, "After 1 minute"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes")];
 
+/// The choices offered for `display.off_after`, in minutes.
+const OFF_AFTER: [(u32, &str); 8] = [
+    (0, "Never"),
+    (1, "After 1 minute"),
+    (5, "After 5 minutes"),
+    (10, "After 10 minutes"),
+    (15, "After 15 minutes"),
+    (30, "After 30 minutes"),
+    (45, "After 45 minutes"),
+    (60, "After 1 hour"),
+];
+
+/// A drop list's labels for `choices`, and the index of `value`; a value not
+/// among them is added as "After N minutes".
+fn minutes_choices(choices: &[(u32, &str)], value: u32) -> (Vec<SharedString>, i32) {
+    let mut labels: Vec<SharedString> = choices.iter().map(|(_, l)| (*l).into()).collect();
+    let index = match choices.iter().position(|(m, _)| *m == value) {
+        Some(i) => i,
+        None => {
+            labels.push(format!("After {value} minutes").into());
+            labels.len() - 1
+        }
+    };
+    (labels, index as i32)
+}
+
 /// The deck's tabs for the Deck tabs page: name, what's on it, Font Awesome glyph.
 fn tab_info(id: &str) -> (&'static str, &'static str, &'static str) {
     match id {
@@ -289,6 +315,7 @@ impl State {
     }
 
     fn set(&mut self, table: &str, key: &str, value: impl Into<Value>) {
+        ensure_table(&mut self.doc, table);
         let mut value = value.into();
         let item = &mut self.doc[table][key];
         // Keep the comment after the value.
@@ -439,17 +466,12 @@ impl State {
         let start = config::TABS.iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
         b.set_start_index(start as i32);
 
-        let mut dims: Vec<SharedString> = DIM_AFTER.iter().map(|(_, l)| (*l).into()).collect();
-        let index = match DIM_AFTER.iter().position(|(m, _)| *m == d.dim_after) {
-            Some(i) => i,
-            None => {
-                dims.push(format!("After {} minutes", d.dim_after).into());
-                dims.len() - 1
-            }
-        };
+        let (dims, index) = minutes_choices(&DIM_AFTER, d.dim_after);
         b.set_dim_options(ModelRc::new(VecModel::from(dims)));
-        b.set_dim_index(index as i32);
-        b.set_off_when_away(d.off_when_away);
+        b.set_dim_index(index);
+        let (offs, index) = minutes_choices(&OFF_AFTER, d.off_after);
+        b.set_off_options(ModelRc::new(VecModel::from(offs)));
+        b.set_off_index(index);
 
         let opens = if d.start == "first" { order[0] } else { d.start.as_str() };
         let rows: Vec<TabRow> = order
@@ -684,6 +706,38 @@ fn put(table: &mut Table, prev: Option<&Table>, key: &str, value: &str) {
         None => {
             table.insert(key, Item::Value(value));
         }
+    }
+}
+
+/// Makes `name` a `[name]` section if it isn't one: a new one goes before the
+/// buttons, and an inline `name = { ... }` (written by 0.5.1's window) becomes one.
+fn ensure_table(doc: &mut DocumentMut, name: &str) {
+    if doc.get(name).is_some_and(Item::is_table) {
+        return;
+    }
+    let mut table = match doc.remove(name) {
+        Some(Item::Value(Value::InlineTable(t))) => t.into_table(),
+        _ => Table::new(),
+    };
+    table.decor_mut().set_prefix("\n");
+    let buttons = doc.get("button").and_then(Item::as_array_of_tables).and_then(|a| a.get(0)).and_then(Table::position);
+    if let Some(at) = buttons {
+        // Make room: every section from the first button on moves down one.
+        for (_, item) in doc.iter_mut() {
+            match item {
+                Item::Table(t) => shift(t, at),
+                Item::ArrayOfTables(a) => a.iter_mut().for_each(|t| shift(t, at)),
+                _ => {}
+            }
+        }
+        table.set_position(Some(at));
+    }
+    doc.insert(name, Item::Table(table));
+}
+
+fn shift(t: &mut Table, from: isize) {
+    if let Some(p) = t.position().filter(|p| *p >= from) {
+        t.set_position(Some(p + 1));
     }
 }
 
@@ -1101,6 +1155,11 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         st.set("display", "dim_after", *minutes as i64);
         st.save(&ui);
     });
+    on!(on_set_off, |ui, st, index| {
+        let Some((minutes, _)) = OFF_AFTER.get(index as usize) else { return };
+        st.set("display", "off_after", *minutes as i64);
+        st.save(&ui);
+    });
     on!(on_move_tab, |ui, st, index, delta| {
         let mut order: Vec<String> = st.cfg.display.tab_order().iter().map(|t| (*t).to_owned()).collect();
         let (from, to) = (index as usize, (index + delta) as usize);
@@ -1299,6 +1358,23 @@ mod tests {
             .collect();
         write_buttons(&mut doc, &buttons);
         assert_eq!(doc.to_string(), config::EXAMPLE);
+    }
+
+    #[test]
+    fn new_sections_go_before_the_buttons() {
+        let mut doc: DocumentMut = "[stats]\nbattery = true\n\n[[button]]\nid = 'a'\n".parse().unwrap();
+        ensure_table(&mut doc, "display");
+        doc["display"]["brightness"] = toml_edit::value(70);
+        assert_eq!(
+            doc.to_string(),
+            "[stats]\nbattery = true\n\n[display]\nbrightness = 70\n\n[[button]]\nid = 'a'\n"
+        );
+
+        let mut doc: DocumentMut = "display = { brightness = 70 }\n[stats]\n".parse().unwrap();
+        ensure_table(&mut doc, "display");
+        let cfg: Config = toml::from_str(&doc.to_string()).unwrap();
+        assert_eq!(cfg.display.brightness, 70);
+        assert!(doc.to_string().contains("[display]"));
     }
 
     #[test]

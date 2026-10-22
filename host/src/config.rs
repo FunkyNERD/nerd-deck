@@ -66,8 +66,8 @@ pub struct DisplayConfig {
     pub tabs: Vec<String>,
     /// Minutes untouched before the screen dims; 0 never dims.
     pub dim_after: u32,
-    /// Turn the screen off after 10 minutes on the waiting screen.
-    pub off_when_away: bool,
+    /// Minutes on the waiting screen before the screen turns off; 0 never.
+    pub off_after: u32,
 }
 
 impl Default for DisplayConfig {
@@ -77,7 +77,7 @@ impl Default for DisplayConfig {
             start: "first".into(),
             tabs: Vec::new(),
             dim_after: 0,
-            off_when_away: false,
+            off_after: 0,
         }
     }
 }

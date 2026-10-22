@@ -234,12 +234,13 @@ export component DevicePage inherits VerticalLayout {
             }
             SettingRow {
                 title: "Turn off when the PC is away";
-                subtitle: "After 10 minutes on the waiting screen. A touch wakes it.";
+                subtitle: "How long the waiting screen stays on. A touch wakes it.";
                 last: true;
-                Toggle {
-                    label: "Turn off when the PC is away";
-                    checked: Backend.off-when-away;
-                    toggled(on) => { Backend.set-flag("display.off_when_away", on); }
+                ComboBox {
+                    width: 200px;
+                    model: Backend.off-options;
+                    current-index <=> Backend.off-index;
+                    selected => { Backend.set-off(self.current-index); }
                 }
             }
         }

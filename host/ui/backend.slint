@@ -116,12 +116,14 @@ export global Backend {
     in-out property <int> start-index;
     in property <[string]> dim-options;
     in-out property <int> dim-index;
-    in property <bool> off-when-away;
+    in property <[string]> off-options;
+    in-out property <int> off-index;
     // Connected to firmware too old for these.
     in property <bool> display-unsupported;
     callback set-brightness(int);
     callback set-start(int);
     callback set-dim(int);
+    callback set-off(int);
     in property <[TabRow]> tabs;
     callback move-tab(int, int);
     callback reset-tabs();
@@ -129,7 +131,7 @@ export global Backend {
     // Switches, set through set-flag with these keys: "stats.removable",
     // "stats.battery", "notifications.enabled", "notifications.all",
     // "notifications.body", "notifications.dnd", "notifications.skip_low",
-    // "updates.firmware", "updates.check", "display.off_when_away".
+    // "updates.firmware", "updates.check".
     in property <bool> removable;
     in property <bool> battery;
     in property <bool> notify-enabled;

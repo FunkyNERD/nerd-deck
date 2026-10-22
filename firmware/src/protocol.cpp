@@ -170,7 +170,7 @@ void handleDisplay(JsonObjectConst o) {
     }
     if (o["brightness"].is<int>()) d.brightness = constrain(o["brightness"].as<int>(), 5, 100);
     if (o["dim_after"].is<uint32_t>()) d.dimAfterS = o["dim_after"].as<uint32_t>();
-    if (o["off_when_away"].is<bool>()) d.offWhenAway = o["off_when_away"].as<bool>();
+    if (o["off_after"].is<uint32_t>()) d.offAfterS = o["off_after"].as<uint32_t>();
     save(d);
     ui::applyDisplay(d);
 }

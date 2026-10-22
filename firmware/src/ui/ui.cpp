@@ -67,11 +67,10 @@ bool userNavigated = false;
 
 // Power saving: the backlight dims when untouched for a while, and goes off
 // when the host has been away long enough.
-constexpr uint32_t kAwayOffMs = 10 * 60 * 1000;
 constexpr uint8_t kDimPercent = 20;
 uint8_t brightness = 80;  // percent, as set
 uint32_t dimAfterMs = 0;  // 0 = never
-bool offWhenAway = false;
+uint32_t offAfterMs = 0;  // on the waiting screen; 0 = never
 uint8_t litPercent = 0xFF;  // what the backlight is at now
 lv_obj_t* wakeCatcher;     // takes the tap that wakes a dimmed screen
 lv_obj_t* batteryBox;
@@ -380,7 +379,7 @@ void setTabOrder(const uint8_t* order) {
 void powerTick(lv_timer_t*) {
     const uint32_t idle = lv_disp_get_inactive_time(nullptr);
     uint8_t target = brightness;
-    if (offWhenAway && waitShown && idle >= kAwayOffMs) target = 0;
+    if (offAfterMs && waitShown && idle >= offAfterMs) target = 0;
     else if (dimAfterMs && idle >= dimAfterMs) target = brightness < kDimPercent ? brightness : kDimPercent;
     if (target != litPercent) {
         litPercent = target;
@@ -1507,7 +1506,7 @@ void applyDisplay(const settings::Display& d) {
     if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);
     brightness = d.brightness;
     dimAfterMs = d.dimAfterS * 1000;
-    offWhenAway = d.offWhenAway;
+    offAfterMs = d.offAfterS * 1000;
     powerTick(nullptr);
 }
 

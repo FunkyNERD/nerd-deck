@@ -17,7 +17,7 @@ struct Display {
     int8_t start;             // a tab, or kStartFirst
     uint8_t brightness;       // percent
     uint32_t dimAfterS;       // 0 = never
-    bool offWhenAway;
+    uint32_t offAfterS;       // on the waiting screen; 0 = never
 };
 
 // The tab named `id`, or -1.

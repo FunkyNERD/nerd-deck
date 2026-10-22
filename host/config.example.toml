@@ -22,7 +22,7 @@ start = "first"           # the tab the deck opens on: "first", or a tab's name
 # tabs = ["system", "network", "storage", "battery", "controls"]   # tab order;
 #                         # tabs left out follow in this order. Battery only shows on PCs with one.
 dim_after = 0             # minutes untouched before the screen dims; 0 = never
-off_when_away = false     # screen off after 10 minutes on the waiting screen
+off_after = 0             # minutes on the waiting screen (PC away) before the screen turns off; 0 = never
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device

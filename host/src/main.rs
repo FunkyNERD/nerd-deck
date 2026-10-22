@@ -470,7 +470,7 @@ fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
         start: d.start.clone(),
         brightness: d.brightness,
         dim_after: d.dim_after * 60,
-        off_when_away: d.off_when_away,
+        off_after: d.off_after * 60,
     })
 }
 
