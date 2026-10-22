@@ -39,12 +39,12 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -54,7 +54,7 @@ jobs:
 
       - name: Cache packaging tools
         id: tools-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /opt/cargo-tools
           key: ${{ runner.os }}-cargo-deb-3.8.0-generate-rpm-0.21.1
@@ -79,14 +79,14 @@ jobs:
         run: PATH="/opt/cargo-tools/bin:$PATH" host/packaging/build-packages.sh
 
       - name: Upload packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nerd-deck-packages
           path: host/dist/
 
       - name: Attach to the release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Only adds files; the release's title and notes stay as written on GitHub.
           tag_name: ${{ github.event.release.tag_name }}
