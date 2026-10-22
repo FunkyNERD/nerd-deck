@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.1"
 // Sent in `hello`. The host only installs its bundled firmware on this board.
 #define FW_BOARD "wt32-sc01-plus"
 

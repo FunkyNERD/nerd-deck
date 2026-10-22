@@ -536,7 +536,12 @@ void buildWaitScreen() {
     makeLabel(waitPill, &lv_font_montserrat_12, 0xC3CAD5, "Waiting for host");
 
     lv_obj_t* ver = makeLabel(waitScreen, &lv_font_montserrat_12, kTextFaint, "fw " FW_VERSION);
-    lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_LEFT, 12, -8);
+
+    // A quiet byline; "NERD" a shade brighter, echoing the wordmark.
+    lv_obj_t* byline = makeLabel(waitScreen, &lv_font_montserrat_12, kTextFaint, "by Funky#C3CAD5 NERD#");
+    lv_label_set_recolor(byline, true);
+    lv_obj_align(byline, LV_ALIGN_BOTTOM_RIGHT, -12, -8);
 }
 
 void waitBarExec(void* bar, int32_t h) { lv_obj_set_height(static_cast<lv_obj_t*>(bar), h); }
