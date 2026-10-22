@@ -35,6 +35,10 @@ const SETTINGS_PATH: &str = "/io/github/FunkyNERD/NerdDeck/Settings";
 /// Typing is saved once it pauses for this long.
 const SAVE_DELAY: Duration = Duration::from_millis(600);
 
+/// How long an install may take, from handing the firmware to the service to
+/// the deck saying hello with it.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// The status is also polled, in case a signal is missed while the service restarts.
 const STATUS_POLL: Duration = Duration::from_secs(3);
 
@@ -962,13 +966,23 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     b.set_connected(s.connected);
     b.set_port(s.port.into());
     b.set_serial(s.serial.into());
-    b.set_firmware(s.firmware.into());
+    b.set_firmware(s.firmware.as_str().into());
     b.set_board(s.board.as_str().into());
     b.set_proto(s.proto as i32);
     b.set_version(if s.version.is_empty() { env!("CARGO_PKG_VERSION").into() } else { s.version }.into());
     b.set_update(s.update.into());
     b.set_flashing(s.flashing);
-    b.set_flash_error(s.flash_error.unwrap_or_default().into());
+    let flash_error = s.flash_error.unwrap_or_default();
+    // An install from this window is done once the deck runs the new
+    // firmware, or the service gave up on it.
+    if b.get_fw_busy() == "installing"
+        && !s.flashing
+        && (!flash_error.is_empty() || s.firmware == b.get_fw_installing().as_str())
+    {
+        b.set_fw_busy("".into());
+        b.set_fw_installing("".into());
+    }
+    b.set_flash_error(flash_error.into());
     // Check GitHub for this deck's firmware when one connects, or a deck on
     // another board replaces it.
     if !s.board.is_empty() && b.get_fw_board() != s.board.as_str() && b.get_check_updates() {
@@ -1448,16 +1462,33 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         thread::spawn(move || {
             let installed = updates::check_firmware(&board)
                 .and_then(|check| check.firmware.context("there's no firmware for this version of nerd-deck"))
-                .and_then(|release| updates::download_firmware(&release))
-                .and_then(|path| {
+                .and_then(|release| Ok((updates::download_firmware(&release)?, release.version)))
+                .and_then(|(path, version)| {
                     deck.install_firmware(&path.to_string_lossy()).map_err(|e| match e {
                         zbus::Error::MethodError(_, Some(msg), _) => anyhow::anyhow!(msg),
                         e => e.into(),
-                    })
+                    })?;
+                    Ok(version)
                 });
-            let _ = weak.upgrade_in_event_loop(move |ui| {
-                busy(&ui, "");
-                if let Err(e) = installed {
+            let _ = weak.upgrade_in_event_loop(move |ui| match installed {
+                // Stays busy until the deck comes back with it (show_status).
+                Ok(version) => {
+                    let b = ui.global::<Backend>();
+                    b.set_fw_installing(version.into());
+                    busy(&ui, "installing");
+                    let weak = ui.as_weak();
+                    Timer::single_shot(INSTALL_TIMEOUT, move || {
+                        let Some(ui) = weak.upgrade() else { return };
+                        let b = ui.global::<Backend>();
+                        if b.get_fw_busy() == "installing" {
+                            b.set_fw_busy("".into());
+                            b.set_fw_error(format!("The deck didn't come back with firmware {}.", b.get_fw_installing()).into());
+                            b.set_fw_installing("".into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    busy(&ui, "");
                     ui.global::<Backend>().set_fw_error(format!("{e:#}").into());
                 }
             });

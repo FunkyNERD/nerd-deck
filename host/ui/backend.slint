@@ -177,8 +177,11 @@ export global Backend {
     in property <string> fw-board;
     // A newer firmware that needs a newer app first.
     in property <string> fw-needs-app;
-    // "checking", "downloading" or "".
+    // "checking", "downloading", "installing" (handed to the service, until
+    // the deck runs it) or "".
     in property <string> fw-busy;
+    // The version being installed.
+    in property <string> fw-installing;
     // Checking or downloading failed.
     in property <string> fw-error;
     callback check-firmware();

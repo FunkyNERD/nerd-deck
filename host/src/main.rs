@@ -360,6 +360,12 @@ impl Host {
                             }
                         };
                         let _ = reply.send(Ok(()));
+                        // Straight away, so the settings window goes from
+                        // downloading to installing without a gap.
+                        self.api.update(|s| {
+                            s.flashing = true;
+                            s.flash_error = None;
+                        });
                         let text = format!("Installing firmware {}...", fw.version);
                         conn.send(&HostMsg::Notify { text })?;
                         thread::sleep(Duration::from_secs(2));
