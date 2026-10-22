@@ -55,6 +55,9 @@ pub struct StatsConfig {
     pub interface: Option<String>,
     /// Mount points to report (the device shows up to 4).
     pub mounts: Vec<String>,
+    /// Also report removable drives (USB disks, SD cards) while they're mounted,
+    /// after `mounts`.
+    pub removable: bool,
 }
 
 impl Default for StatsConfig {
@@ -63,6 +66,7 @@ impl Default for StatsConfig {
             interval_ms: 1000,
             interface: None,
             mounts: vec!["/".into()],
+            removable: true,
         }
     }
 }

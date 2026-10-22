@@ -11,6 +11,7 @@ baud = 115200
 interval_ms = 1000
 # interface = "enp5s0"    # default: busiest non-loopback interface
 mounts = ["/", "/home"]   # the device shows up to 4
+removable = true          # also show USB drives / SD cards while mounted
 
 # Up to 12 buttons, laid out 4x3 on the Controls tab in this order.
 # Commands run via `sh -c` as the user running nerd-deck.

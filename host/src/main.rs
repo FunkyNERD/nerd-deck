@@ -5,6 +5,7 @@ mod config;
 mod device;
 mod icons;
 mod images;
+mod mounts;
 mod protocol;
 
 use std::path::PathBuf;
@@ -52,7 +53,11 @@ fn main() -> Result<()> {
     }
 
     let cfg = Config::load(cli.config.as_deref())?;
-    let mut collector = Collector::new(cfg.stats.interface.clone(), cfg.stats.mounts.clone());
+    let mut collector = Collector::new(
+        cfg.stats.interface.clone(),
+        cfg.stats.mounts.clone(),
+        cfg.stats.removable,
+    );
 
     if cli.dump {
         thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);

@@ -521,6 +521,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "image",
+ "libc",
  "log",
  "serde",
  "serde_json",
