@@ -30,7 +30,9 @@ if nothing arrives for 3 s.
   "cpu":  {"usage": 12.5, "cores": [10.0, 15.0], "freq_mhz": 3400, "temp": 54.0},
   "mem":  {"used": 8589934592, "total": 34359738368, "swap_used": 0, "swap_total": 8589934592},
   "net":  {"iface": "enp5s0", "rx_bps": 125000, "tx_bps": 4000},
-  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000, "removable": false}],
+  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000, "removable": false,
+              "read_bps": 1200000, "write_bps": 340000}],
+  "gpu":  {"usage": 41, "temp": 62.0, "vram_used": 3328000000, "vram_total": 4294967296},
   "battery": {"percent": 62, "charging": true, "state": "charging", "watts": 12.5,
               "minutes": 95, "wh": 56.4, "full_wh": 90.1, "design_wh": 84.3,
               "volts": 12.9, "temp": 31.5, "cycles": 143, "limit": 85,
@@ -39,7 +41,14 @@ if nothing arrives for 3 s.
 ```
 Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
 (left out when no sensor is found). The device shows at most 32 cores and 4 disks;
-`removable` marks a USB drive or SD card (protocol v5; false when left out).
+`removable` marks a USB drive or SD card (protocol v5; false when left out), and
+`read_bps` / `write_bps` are its disk's activity (v6).
+`gpu` (v6) is the discrete GPU, when the host can read one: `usage` percent,
+`temp`, and VRAM in bytes. A powered-down GPU (laptops with switchable
+graphics) is just `{"asleep": true}`, since reading it would wake it. Without
+`gpu`, the host sends `top` instead: the busiest program, as
+`{"name": "firefox", "cpu": 38.0, "mem": 2100000000}`, with `cpu` a share of
+the whole CPU. The device shows whichever it gets under memory.
 `battery` is left out when the host has no battery; with more than one, `percent`
 covers them all. The device only shows the battery reading and the Battery tab
 when it's present. The tab shows the rest:

@@ -5,6 +5,7 @@ mod collector;
 mod config;
 mod device;
 mod firmware;
+mod gpu;
 mod icons;
 mod images;
 mod mounts;

@@ -110,8 +110,15 @@ The open tab's pill shows its name; the others show just an icon. Tap one, or
 swipe between them. The order, and the tab the deck opens on, are yours to set
 in the settings window (or `[display]` in the config).
 
-**Storage** shows each disk on a card: how full it is, used of total, and
-what's free. USB drives and SD cards are marked as such.
+**System** shows the CPU, memory (with swap as a note beside it), uptime and
+per-core load. Under memory is the GPU, if the PC has one it can read (NVIDIA
+through `nvidia-smi`, or AMD): usage, temperature and VRAM. A laptop's
+discrete GPU shows as asleep while it's powered down, and nerd-deck leaves it
+that way. Without one, the busiest program takes its place.
+
+**Storage** shows each disk on a card: how full it is, used of total, what's
+free, and how fast it's reading and writing. USB drives and SD cards are
+marked as such.
 
 **Battery**, on a laptop only, shows the charge and what it's doing (time to full or empty, or held at a charge limit),
 power in or out with a chart of the last 10 minutes, the power source (with a

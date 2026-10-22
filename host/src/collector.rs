@@ -1,13 +1,15 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use sysinfo::{Components, Disks, Networks, System};
+use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 use crate::battery;
+use crate::gpu::Gpu;
 use crate::mounts;
-use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats};
+use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats, TopProcess};
 
 /// The device shows at most this many disks.
 const MAX_DISKS: usize = 4;
@@ -30,6 +32,10 @@ pub struct Collector {
     /// Set by the mount watcher; the disk list is rescanned only then.
     mounts_changed: Arc<AtomicBool>,
     last_sample: Instant,
+    /// Sectors read and written so far, by block device, from the last sample.
+    disk_io: HashMap<String, (u64, u64)>,
+    /// None on PCs without a readable GPU, which get the busiest process instead.
+    gpu: Option<Gpu>,
 }
 
 impl Collector {
@@ -49,6 +55,8 @@ impl Collector {
             battery_watts: None,
             mounts_changed: mounts::watch(),
             last_sample: Instant::now(),
+            disk_io: read_diskstats(),
+            gpu: Gpu::find(),
         }
     }
 
@@ -67,6 +75,11 @@ impl Collector {
         self.last_sample = Instant::now();
 
         let load = System::load_average();
+        let io = read_diskstats();
+        let disks = self.disks(&io, elapsed);
+        self.disk_io = io;
+        let gpu = self.gpu.as_ref().and_then(Gpu::latest);
+        let top = if gpu.is_none() { self.top_process() } else { None };
 
         Stats {
             host: System::host_name().unwrap_or_default(),
@@ -80,7 +93,9 @@ impl Collector {
                 swap_total: self.sys.total_swap(),
             },
             net: self.net(elapsed),
-            disks: self.disks(),
+            disks,
+            gpu,
+            top,
             battery: if self.battery { self.battery() } else { None },
         }
     }
@@ -139,12 +154,57 @@ impl Collector {
         }
     }
 
-    fn disks(&self) -> Vec<DiskStats> {
-        let stats = |mount: String, d: &sysinfo::Disk| DiskStats {
-            mount,
-            used: d.total_space() - d.available_space(),
-            total: d.total_space(),
-            removable: is_removable(d),
+    /// The program using the most CPU, its processes counted together.
+    fn top_process(&mut self) -> Option<TopProcess> {
+        self.sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::new().with_cpu().with_memory().with_exe(UpdateKind::OnlyIfNotSet),
+        );
+        let cores = self.sys.cpus().len().max(1) as f32;
+        let mut by_name: HashMap<String, (f32, u64)> = HashMap::new();
+        for p in self.sys.processes().values() {
+            // Threads show up as processes too; count each once.
+            if p.thread_kind().is_some() {
+                continue;
+            }
+            // By program: the kernel cuts names to 15 characters, and many
+            // programs name their helpers ("Isolated Web Co" is firefox).
+            let name = p
+                .exe()
+                .and_then(Path::file_name)
+                .unwrap_or(p.name())
+                .to_string_lossy()
+                .into_owned();
+            let e = by_name.entry(name).or_default();
+            e.0 += p.cpu_usage();
+            e.1 += p.memory();
+        }
+        by_name
+            .into_iter()
+            .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
+            .map(|(name, (cpu, mem))| TopProcess { name, cpu: (cpu / cores).min(100.0), mem })
+    }
+
+    fn disks(&self, io: &HashMap<String, (u64, u64)>, elapsed: f64) -> Vec<DiskStats> {
+        let stats = |mount: String, d: &sysinfo::Disk| {
+            // Rates from the block device's counters; a device that's new
+            // since the last sample starts at zero.
+            let (read_bps, write_bps) = block_device(d)
+                .and_then(|dev| Some((io.get(&dev)?, self.disk_io.get(&dev)?)))
+                .map(|(now, before)| {
+                    let rate = |n: u64, b: u64| (n.saturating_sub(b) as f64 * 512.0 / elapsed) as u64;
+                    (rate(now.0, before.0), rate(now.1, before.1))
+                })
+                .unwrap_or((0, 0));
+            DiskStats {
+                mount,
+                used: d.total_space() - d.available_space(),
+                total: d.total_space(),
+                removable: is_removable(d),
+                read_bps,
+                write_bps,
+            }
         };
 
         let mut out: Vec<DiskStats> = self
@@ -198,9 +258,35 @@ fn is_automount(mount: &Path) -> bool {
     AUTOMOUNT_DIRS.iter().any(|dir| mount.starts_with(dir) && mount != Path::new(dir))
 }
 
+/// Sectors read and written so far, by block device ("nvme0n1p2", "dm-0").
+fn read_diskstats() -> HashMap<String, (u64, u64)> {
+    parse_diskstats(&std::fs::read_to_string("/proc/diskstats").unwrap_or_default())
+}
+
+fn parse_diskstats(text: &str) -> HashMap<String, (u64, u64)> {
+    text.lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            Some((f.get(2)?.to_string(), (f.get(5)?.parse().ok()?, f.get(9)?.parse().ok()?)))
+        })
+        .collect()
+}
+
+/// The block device a disk lives on: /dev/mapper/root resolves to dm-0.
+fn block_device(d: &sysinfo::Disk) -> Option<String> {
+    let path = std::fs::canonicalize(d.name()).ok()?;
+    Some(path.file_name()?.to_str()?.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_diskstats() {
+        let text = " 259       2 nvme0n1p2 4211 120 1000 300 900 40 2000 500 0 700 800\n";
+        assert_eq!(parse_diskstats(text)["nvme0n1p2"], (1000, 2000));
+    }
 
     #[test]
     fn automount_dirs() {

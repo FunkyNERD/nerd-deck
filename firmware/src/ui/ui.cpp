@@ -96,8 +96,15 @@ lv_obj_t* coreBars[kMaxCores];
 lv_obj_t* loadLabel;
 lv_obj_t* memBar;
 lv_obj_t* memLabel;
+// Swap is a note at the end of the memory bar: on most PCs it stays at 0.
 lv_obj_t* swapBar;
 lv_obj_t* swapLabel;
+// Under memory: the GPU, or the busiest program on PCs without one to read.
+lv_obj_t* slotCaption;
+lv_obj_t* slotValue;  // top right
+lv_obj_t* slotName;   // bottom left: the program
+lv_obj_t* slotBar;    // bottom left: GPU usage
+lv_obj_t* slotSub;    // bottom right
 lv_obj_t* hostLabel;
 lv_obj_t* uptimeLabel;
 
@@ -134,10 +141,12 @@ struct DiskCard {
     lv_obj_t* usage;
     lv_obj_t* bar;
     lv_obj_t* free;
+    lv_obj_t* io;  // read and write rates, beside `free`
 };
 DiskCard diskCards[kMaxDisks];
 lv_obj_t* noDisksLabel;
 uint8_t diskLayout = 0xFF;  // disk count the cards are laid out for
+bool diskGrid = false;      // two by two, so the cards are half width
 
 // Controls tab
 lv_obj_t* buttonGrid;
@@ -540,21 +549,42 @@ void buildSystemTab(lv_obj_t* tab) {
     cpuTempLabel = makeLabel(cpuCard, &lv_font_montserrat_12, kTextDim, "");
     lv_obj_align(cpuTempLabel, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
 
-    // Right column: memory, swap, host and uptime.
+    // Right column: memory, the GPU (or busiest program), host and uptime.
     const lv_coord_t colX = 150 + kGap, colW = 464 - colX;
     const lv_coord_t halfW = (colW - kGap) / 2;
 
-    auto memCard = [&](lv_coord_t y, const char* caption, lv_obj_t** label, lv_obj_t** bar) {
+    // A card with a caption, a value top right, and a row along the bottom.
+    auto rowCard = [&](lv_coord_t y, const char* caption, lv_obj_t** captionLabel, lv_obj_t** value) {
         lv_obj_t* card = makeCard(tab, colX, y, colW, 48);
-        makeCaption(card, caption);
-        *label = makeLabel(card, &lv_font_montserrat_14, kText, "");
-        lv_label_set_recolor(*label, true);
-        lv_obj_align(*label, LV_ALIGN_TOP_RIGHT, 0, -2);
-        *bar = makeBar(card, LV_PCT(100), 6, kGreen);
-        lv_obj_align(*bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+        lv_obj_t* c = makeCaption(card, caption);
+        if (captionLabel) *captionLabel = c;
+        *value = makeLabel(card, &lv_font_montserrat_14, kText, "");
+        lv_label_set_recolor(*value, true);
+        lv_obj_align(*value, LV_ALIGN_TOP_RIGHT, 0, -2);
+        lv_obj_t* row = lv_obj_create(card);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, LV_PCT(100), 16);
+        lv_obj_align(row, LV_ALIGN_BOTTOM_LEFT, 0, 2);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 10, 0);
+        noScroll(row);
+        return row;
     };
-    memCard(0, "RAM", &memLabel, &memBar);
-    memCard(48 + kGap, "SWAP", &swapLabel, &swapBar);
+
+    lv_obj_t* memRow = rowCard(0, "MEMORY", nullptr, &memLabel);
+    memBar = makeBar(memRow, 10, 6, kGreen);
+    lv_obj_set_flex_grow(memBar, 1);
+    swapLabel = makeLabel(memRow, &lv_font_montserrat_12, kTextFaint, "");
+    swapBar = makeBar(memRow, 28, 4, kGreen);
+
+    lv_obj_t* slotRow = rowCard(48 + kGap, "GPU", &slotCaption, &slotValue);
+    slotName = makeLabel(slotRow, &lv_font_montserrat_14, kText, "");
+    lv_label_set_long_mode(slotName, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(slotName, 1);
+    slotBar = makeBar(slotRow, 10, 6, kCyan);
+    lv_obj_set_flex_grow(slotBar, 1);
+    slotSub = makeLabel(slotRow, &lv_font_montserrat_12, kTextFaint, "");
 
     auto infoCard = [&](lv_coord_t x, const char* caption) {
         lv_obj_t* card = makeCard(tab, x, 2 * (48 + kGap), halfW, 48);
@@ -651,6 +681,7 @@ void layoutDisks(uint8_t count) {
     if (count == diskLayout) return;
     diskLayout = count;
     const bool grid = count > 2;
+    diskGrid = grid;
     const lv_coord_t w = grid ? (kBodyW - kGap) / 2 : kBodyW, h = (kBodyH - kGap) / 2;
     for (size_t i = 0; i < kMaxDisks; i++) {
         DiskCard& d = diskCards[i];
@@ -694,6 +725,9 @@ void buildStorageTab(lv_obj_t* tab) {
         lv_obj_set_pos(d.bar, 0, 60);
         d.free = makeLabel(d.card, &lv_font_montserrat_12, kTextFaint, "");
         lv_obj_set_pos(d.free, 0, 76);
+        d.io = makeLabel(d.card, &lv_font_montserrat_12, kTextFaint, "");
+        lv_label_set_recolor(d.io, true);
+        lv_obj_align(d.io, LV_ALIGN_TOP_RIGHT, 0, 76);
     }
     noDisksLabel = makeLabel(tab, &lv_font_montserrat_14, kTextDim, "No disks to show");
     lv_obj_center(noDisksLabel);
@@ -1583,10 +1617,61 @@ void updateStats(const HostStats& s) {
     lv_label_set_text_fmt(memLabel, "%s #%06X / %s#", a, static_cast<unsigned>(kTextFaint), b);
     lv_bar_set_value(memBar, pct(s.mem.used, s.mem.total), LV_ANIM_ON);
 
+    // Swap: just how much is used, and of what once it's in use.
     fmtBytes(s.mem.swap_used, a, sizeof a);
     fmtBytes(s.mem.swap_total, b, sizeof b);
-    lv_label_set_text_fmt(swapLabel, "%s #%06X / %s#", a, static_cast<unsigned>(kTextFaint), b);
+    if (!s.mem.swap_total) lv_label_set_text(swapLabel, "no swap");
+    else if (!s.mem.swap_used) lv_label_set_text_fmt(swapLabel, "swap %s", a);
+    else lv_label_set_text_fmt(swapLabel, "swap %s / %s", a, b);
+    if (s.mem.swap_total) lv_obj_clear_flag(swapBar, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(swapBar, LV_OBJ_FLAG_HIDDEN);
     lv_bar_set_value(swapBar, pct(s.mem.swap_used, s.mem.swap_total), LV_ANIM_ON);
+
+    // The GPU, or else the busiest program.
+    const bool gpu = s.gpu.present;
+    lv_label_set_text(slotCaption, gpu ? "GPU" : "BUSIEST");
+    if (gpu) {
+        lv_obj_add_flag(slotName, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(slotBar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_font(slotSub, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(slotSub, lv_color_hex(kTextFaint), 0);
+        if (s.gpu.asleep) {
+            lv_label_set_text_fmt(slotValue, "#%06X asleep#", static_cast<unsigned>(kTextFaint));
+            lv_bar_set_value(slotBar, 0, LV_ANIM_ON);
+            lv_label_set_text(slotSub, "powered down");
+        } else {
+            // The temperature takes the CPU's colours.
+            const float t = s.gpu.temp;
+            const uint32_t tc = isnan(t) ? kTextFaint : t >= tempHot ? kRed : t >= tempWarm ? kOrange : kTextFaint;
+            if (isnan(t)) lv_label_set_text_fmt(slotValue, "%u%%", static_cast<unsigned>(s.gpu.usage));
+            else
+                setTextf(slotValue, "%u%%  #%06X %.0f C#", static_cast<unsigned>(s.gpu.usage),
+                         static_cast<unsigned>(tc), static_cast<double>(t));
+            lv_bar_set_value(slotBar, s.gpu.usage, LV_ANIM_ON);
+            if (s.gpu.vram_total) {
+                fmtBytes(s.gpu.vram_used, a, sizeof a);
+                fmtBytes(s.gpu.vram_total, b, sizeof b);
+                lv_label_set_text_fmt(slotSub, "VRAM %s / %s", a, b);
+            } else {
+                lv_label_set_text(slotSub, "");
+            }
+        }
+    } else {
+        lv_obj_clear_flag(slotName, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(slotBar, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_font(slotSub, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(slotSub, lv_color_hex(kCyan), 0);
+        if (s.top.present) {
+            fmtBytes(s.top.mem, a, sizeof a);
+            lv_label_set_text_fmt(slotValue, "#%06X %s#", static_cast<unsigned>(kTextFaint), a);
+            lv_label_set_text(slotName, s.top.name);
+            setTextf(slotSub, "%.0f%% CPU", static_cast<double>(s.top.cpu));
+        } else {
+            lv_label_set_text(slotValue, "");
+            lv_label_set_text(slotName, "--");
+            lv_label_set_text(slotSub, "");
+        }
+    }
 
     lv_label_set_text(hostLabel, s.host[0] ? s.host : "-");
     fmtUptime(s.uptime, a, sizeof a);
@@ -1625,6 +1710,13 @@ void updateStats(const HostStats& s) {
         lv_bar_set_value(c.bar, p, LV_ANIM_ON);
         fmtBytes(d.total > d.used ? d.total - d.used : 0, a, sizeof a);
         lv_label_set_text_fmt(c.free, "%s free", a);
+        char r[16], w[16];
+        fmtBytes(d.read_bps, r, sizeof r);
+        fmtBytes(d.write_bps, w, sizeof w);
+        // Half-width cards leave out "/s" to fit beside the free space.
+        const char* per = diskGrid ? "" : "/s";
+        lv_label_set_text_fmt(c.io, "#%06X " LV_SYMBOL_DOWNLOAD " %s%s#  #%06X " LV_SYMBOL_UPLOAD " %s%s#",
+                              static_cast<unsigned>(kCyan), r, per, static_cast<unsigned>(kOrange), w, per);
     }
 }
 

@@ -118,6 +118,12 @@ pub struct Stats {
     pub mem: MemStats,
     pub net: NetStats,
     pub disks: Vec<DiskStats>,
+    /// The discrete GPU, when there's one to read. Added in v6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuStats>,
+    /// The busiest program, on hosts without `gpu`. Added in v6.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<TopProcess>,
     /// Left out when the host has no battery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub battery: Option<BatteryStats>,
@@ -157,6 +163,38 @@ pub struct DiskStats {
     pub total: u64,
     /// A USB drive or SD card.
     pub removable: bool,
+    /// Bytes/s. Added in v6.
+    pub read_bps: u64,
+    pub write_bps: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct GpuStats {
+    /// Powered down: the other fields are left out, since reading them would
+    /// wake it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
+    /// Percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<u8>,
+    /// Degrees Celsius.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp: Option<f32>,
+    /// Bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_used: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_total: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TopProcess {
+    /// The program; its processes are counted together.
+    pub name: String,
+    /// Percent of the whole CPU, like `cpu.usage`.
+    pub cpu: f32,
+    /// Bytes.
+    pub mem: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

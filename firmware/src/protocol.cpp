@@ -68,6 +68,8 @@ void handleStats(JsonObjectConst o) {
         disk.used = d["used"] | uint64_t(0);
         disk.total = d["total"] | uint64_t(0);
         disk.removable = d["removable"] | false;
+        disk.read_bps = d["read_bps"] | uint64_t(0);
+        disk.write_bps = d["write_bps"] | uint64_t(0);
     }
 
     JsonObjectConst battery = o["battery"];
@@ -93,6 +95,23 @@ void handleStats(JsonObjectConst o) {
         b.limit = battery["limit"] | 0u;
         b.ac = battery["ac"] | b.charging;
         b.charger_w = battery["charger_w"] | NAN;
+    }
+
+    JsonObjectConst gpu = o["gpu"];
+    if (!gpu.isNull()) {
+        s.gpu.present = true;
+        s.gpu.asleep = gpu["asleep"] | false;
+        s.gpu.usage = gpu["usage"] | 0u;
+        s.gpu.temp = gpu["temp"] | NAN;
+        s.gpu.vram_used = gpu["vram_used"] | uint64_t(0);
+        s.gpu.vram_total = gpu["vram_total"] | uint64_t(0);
+    }
+    JsonObjectConst top = o["top"];
+    if (!top.isNull()) {
+        s.top.present = true;
+        strlcpy(s.top.name, top["name"] | "", sizeof s.top.name);
+        s.top.cpu = top["cpu"] | 0.0f;
+        s.top.mem = top["mem"] | uint64_t(0);
     }
 
     ui::updateStats(s);
