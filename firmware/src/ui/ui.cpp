@@ -46,8 +46,10 @@ const lv_color_t kTxColor = lv_color_hex(kOrange);
 // Header: one pill per tab, icon only but for the open tab's, which also
 // shows its name. The Battery tab is left out on hosts without a battery.
 enum Tab : uint8_t { kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls, kTabCount };
-constexpr const char* kTabIcons[kTabCount] = {LV_SYMBOL_HOME, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
+constexpr const char* kTabIcons[kTabCount] = {"" /* the logo, drawn */, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
                                               LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
+// An open tab's icon colour. System's is the logo's three (kStripe).
+constexpr uint32_t kTabColors[kTabCount] = {kCyan, kCyan, kOrange, kGreen, 0x42A5F5};
 constexpr const char* kTabNames[kTabCount] = {"System", "Network", "Storage", "Battery", "Controls"};
 lv_obj_t* tabview;
 static_assert(kTabCount == settings::kTabCount, "Tab follows settings::kTabIds");
@@ -55,6 +57,8 @@ lv_obj_t* tabPages[kTabCount];
 lv_obj_t* tabPills[kTabCount];
 lv_obj_t* tabPillIcons[kTabCount];
 lv_obj_t* tabPillNames[kTabCount];
+// System's icon is the logo's three bars, drawn: the fonts have no chart.
+lv_obj_t* logoBars[3];
 uint16_t currentTab = kTabSystem;
 bool hasBattery = false;
 // The tab at each position, and each tab's position: the tabview's pages and
@@ -320,7 +324,12 @@ void styleTabPills() {
         const bool open = i == currentTab;
         lv_obj_set_style_bg_opa(tabPills[i], open ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_opa(tabPills[i], open ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-        lv_obj_set_style_text_color(tabPillIcons[i], lv_color_hex(open ? kText : kTextFaint), 0);
+        if (i == kTabSystem) {
+            for (size_t b = 0; b < 3; b++)
+                lv_obj_set_style_bg_color(logoBars[b], lv_color_hex(open ? kStripe[b] : kTextFaint), 0);
+        } else {
+            lv_obj_set_style_text_color(tabPillIcons[i], lv_color_hex(open ? kTabColors[i] : kTextFaint), 0);
+        }
         if (open) lv_obj_clear_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -444,7 +453,21 @@ void buildHeader() {
         lv_obj_set_ext_click_area(pill, 5);  // the header's full height
         lv_obj_add_event_cb(pill, onTabPill, LV_EVENT_CLICKED, reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
         tabPills[i] = pill;
-        tabPillIcons[i] = makeLabel(pill, &lv_font_montserrat_16, kTextFaint, kTabIcons[i]);
+        if (i == kTabSystem) {
+            // The logo's proportions: bars 30, 56 and 40 tall, 14 wide, 6 apart.
+            lv_obj_t* logo = lv_obj_create(pill);
+            lv_obj_remove_style_all(logo);
+            lv_obj_set_size(logo, 16, 16);
+            lv_obj_clear_flag(logo, LV_OBJ_FLAG_CLICKABLE);
+            constexpr lv_coord_t kBarH[] = {9, 16, 11};
+            for (size_t b = 0; b < 3; b++) {
+                logoBars[b] = makeRect(logo, 4, kBarH[b], kStripe[b], 1);
+                lv_obj_set_pos(logoBars[b], b * 6, 16 - kBarH[b]);
+            }
+            tabPillIcons[i] = logo;
+        } else {
+            tabPillIcons[i] = makeLabel(pill, &lv_font_montserrat_16, kTextFaint, kTabIcons[i]);
+        }
         tabPillNames[i] = makeLabel(pill, &lv_font_montserrat_14, kText, kTabNames[i]);
     }
     lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);  // until the host reports a battery

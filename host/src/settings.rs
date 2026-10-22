@@ -80,7 +80,7 @@ fn minutes_choices(choices: &[(u32, &str)], value: u32) -> (Vec<SharedString>, i
 /// The deck's tabs for the Deck tabs page: name, what's on it, Font Awesome glyph.
 fn tab_info(id: &str) -> (&'static str, &'static str, &'static str) {
     match id {
-        "system" => ("System", "CPU, memory, uptime and per-core load", "\u{f015}"),
+        "system" => ("System", "CPU, memory, uptime and per-core load", ""),
         "network" => ("Network", "Download and upload rates, with a traffic graph", "\u{f1eb}"),
         "storage" => ("Storage", "How full each disk is, USB drives included", "\u{f0a0}"),
         "battery" => ("Battery", "Charge, power draw, health and the charge limit", "\u{f240}"),
@@ -197,6 +197,81 @@ struct Button {
     color: Option<String>,
     /// Added in this window; its ID follows its label until the window closes.
     fresh: bool,
+}
+
+/// A ready-made action for the editor's Action list: what it's called there,
+/// its command, and the label and icon a new button takes from it.
+struct Preset {
+    name: &'static str,
+    command: &'static str,
+    label: &'static str,
+    icon: &'static str,
+}
+
+/// The default config's buttons first, then more of the same kind.
+const PRESETS: [Preset; 11] = [
+    Preset { name: "Lock the screen", command: "loginctl lock-session", label: "Lock", icon: "eye_close" },
+    Preset {
+        name: "Mute or unmute",
+        command: "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle",
+        label: "Mute",
+        icon: "mute",
+    },
+    Preset {
+        name: "Volume down",
+        command: "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+        label: "Vol -",
+        icon: "volume_mid",
+    },
+    Preset {
+        name: "Volume up",
+        command: "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+",
+        label: "Vol +",
+        icon: "volume_max",
+    },
+    Preset { name: "Play or pause", command: "playerctl play-pause", label: "Play / Pause", icon: "play" },
+    Preset { name: "Open a terminal", command: "x-terminal-emulator", label: "Terminal", icon: "keyboard" },
+    Preset { name: "Suspend", command: "systemctl suspend", label: "Suspend", icon: "power" },
+    Preset { name: "Next track", command: "playerctl next", label: "Next", icon: "next" },
+    Preset { name: "Previous track", command: "playerctl previous", label: "Previous", icon: "prev" },
+    Preset {
+        name: "Mute the microphone",
+        command: "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle",
+        label: "Mic",
+        icon: "audio",
+    },
+    Preset { name: "Open the file manager", command: "xdg-open ~", label: "Files", icon: "directory" },
+];
+
+/// The Action list: these two, then the presets.
+const ACTION_PROGRAM: i32 = 0;
+const ACTION_URL: i32 = 1;
+
+/// `xdg-open` with the URL in single quotes, so the shell leaves it alone.
+fn url_command(url: &str) -> String {
+    format!("xdg-open '{}'", url.replace('\'', "'\\''"))
+}
+
+/// The URL in a command `url_command` would write, if it is one.
+fn command_url(command: &str) -> Option<String> {
+    let arg = command.strip_prefix("xdg-open ")?.trim();
+    // Quoted, it's one this window wrote, even while still empty; bare, only a
+    // link counts (not a path like `~`).
+    match arg.strip_prefix('\'').and_then(|a| a.strip_suffix('\'')) {
+        Some(quoted) => Some(quoted.replace("'\\''", "'")),
+        None => arg.contains(':').then(|| arg.to_owned()),
+    }
+}
+
+/// Which entry of the Action list a command is.
+fn action_of(command: &str) -> i32 {
+    if let Some(i) = PRESETS.iter().position(|p| p.command == command.trim()) {
+        return i as i32 + 2;
+    }
+    if command_url(command).is_some() {
+        return ACTION_URL;
+    }
+    ACTION_PROGRAM
 }
 
 /// The deck's label colour when a button doesn't set one.
@@ -396,11 +471,13 @@ impl State {
             has_image: image.is_some(),
             image: image.unwrap_or_default(),
             image_path: b.image.unwrap_or_default().into(),
-            command: b.command.into(),
+            command: b.command.clone().into(),
             empty: false,
             has_color: b.color.is_some(),
             color: slint_color(b.color.as_deref().and_then(config::parse_color).unwrap_or(DEFAULT_LABEL)),
             color_hex: b.color.unwrap_or_default().into(),
+            action: action_of(&b.command),
+            url: command_url(&b.command).unwrap_or_default().into(),
         }
     }
 
@@ -482,6 +559,13 @@ impl State {
                     name: name.into(),
                     desc: desc.into(),
                     glyph: glyph.into(),
+                    logo: *id == "system",
+                    color: slint_color(match *id {
+                        "network" => 0x26C6DA,
+                        "storage" => 0xFFA726,
+                        "battery" => 0x66BB6A,
+                        _ => 0x42A5F5,
+                    }),
                     start: *id == opens,
                     laptop: *id == "battery",
                 }
@@ -897,6 +981,12 @@ thread_local! {
 fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     let b = ui.global::<Backend>();
     state.borrow_mut().refresh_buttons(ui);
+    let actions: Vec<SharedString> = ["Run a program", "Open a URL"]
+        .into_iter()
+        .chain(PRESETS.iter().map(|p| p.name))
+        .map(Into::into)
+        .collect();
+    b.set_actions(ModelRc::new(VecModel::from(actions)));
     let swatches: Vec<Swatch> =
         SWATCHES.iter().map(|&c| Swatch { color: slint_color(c), hex: format!("#{c:06X}").into() }).collect();
     b.set_swatches(ModelRc::new(VecModel::from(swatches)));
@@ -983,6 +1073,53 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             let mut st = state.borrow_mut();
             if let Some(b) = st.buttons[slot as usize].as_mut() {
                 b.command = text.to_string();
+            }
+            st.refresh_buttons(&ui);
+            st.save_later(&ui, &state);
+        });
+    }
+    on!(on_set_action, |ui, st, slot, action| {
+        let slot = slot as usize;
+        let Some(b) = st.buttons[slot].as_mut() else { return };
+        match action {
+            ACTION_PROGRAM => {
+                // Keep a preset's command to edit; a URL becomes a blank program.
+                if command_url(&b.command).is_some() {
+                    b.command.clear();
+                }
+            }
+            ACTION_URL => {
+                if command_url(&b.command).is_none() {
+                    b.command = url_command("https://");
+                }
+            }
+            i => {
+                let Some(p) = PRESETS.get(i as usize - 2) else { return };
+                b.command = p.command.to_owned();
+                // A button added in this window takes the preset's look too.
+                if b.fresh {
+                    b.label = p.label.to_owned();
+                    if b.kind == Kind::Icon {
+                        b.icon = Some(p.icon.to_owned());
+                    }
+                    let id = st.unique_id(p.label, slot);
+                    if let Some(b) = st.buttons[slot].as_mut() {
+                        b.id = id;
+                    }
+                }
+            }
+        }
+        st.refresh_buttons(&ui);
+        st.save(&ui);
+    });
+    {
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        b.on_set_url(move |slot, text| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            if let Some(b) = st.buttons[slot as usize].as_mut() {
+                b.command = url_command(text.trim());
             }
             st.refresh_buttons(&ui);
             st.save_later(&ui, &state);
@@ -1375,6 +1512,24 @@ mod tests {
         let cfg: Config = toml::from_str(&doc.to_string()).unwrap();
         assert_eq!(cfg.display.brightness, 70);
         assert!(doc.to_string().contains("[display]"));
+    }
+
+    #[test]
+    fn actions_round_trip() {
+        let url = "https://example.com/a?b=it's";
+        let command = url_command(url);
+        assert_eq!(command_url(&command).as_deref(), Some(url));
+        assert_eq!(action_of(&command), ACTION_URL);
+        assert_eq!(action_of("xdg-open https://x.org"), ACTION_URL);
+        assert_eq!(action_of(&url_command("")), ACTION_URL);
+        assert_eq!(action_of("xdg-open ~"), 2 + PRESETS.iter().position(|p| p.command == "xdg-open ~").unwrap() as i32);
+        assert_eq!(action_of("playerctl play-pause"), 2 + 4);
+        assert_eq!(action_of("firefox"), ACTION_PROGRAM);
+        // The default config's buttons are all presets.
+        let cfg: Config = toml::from_str(config::EXAMPLE).unwrap();
+        for b in &cfg.buttons {
+            assert!(action_of(&b.command) >= 2, "{} isn't a preset", b.command);
+        }
     }
 
     #[test]

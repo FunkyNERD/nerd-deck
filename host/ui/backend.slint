@@ -17,6 +17,10 @@ export struct DeckButton {
     has-color: bool,
     color: color,
     color-hex: string,
+    // Index into Backend.actions: 0 a program, 1 a URL, then the presets.
+    action: int,
+    // The URL, when action is 1.
+    url: string,
 }
 
 export struct Swatch {
@@ -41,6 +45,10 @@ export struct TabRow {
     name: string,
     desc: string,
     glyph: string,
+    // Drawn as the logo's three bars instead of a glyph (System).
+    logo: bool,
+    // The icon's colour while the tab is open.
+    color: color,
     // Where the deck opens.
     start: bool,
     // Only shown on PCs with a battery.
@@ -89,6 +97,9 @@ export global Backend {
     callback move-button(int, int);
     callback set-label(int, string);
     callback set-command(int, string);
+    in property <[string]> actions;
+    callback set-action(int, int);
+    callback set-url(int, string);
     callback set-kind(int, int);
     callback set-icon(int, string);
     // "#RRGGBB", or "" for the deck's default.

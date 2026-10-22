@@ -153,8 +153,10 @@ icon) opens a window for everything in the config:
   on, dimming when idle, and turning off when the PC is away.
 - **Buttons:** the Controls tab as a grid. Pick a button to change its label,
   its text colour (presets or any hex colour), its icon (the deck's own
-  symbols, searchable), an image from a file, or its command, which **Run
-  now** tries on the spot. Add, remove and reorder them.
+  symbols, searchable), an image from a file, and what it does: a ready-made
+  action (lock, volume, media keys, a terminal, suspend, ...), opening a URL,
+  or running any program. **Run now** tries it on the spot. Add, remove and
+  reorder them.
 - **Stats:** update interval, network interface, battery, and which disks the
   Storage tab shows, in what order.
 - **Deck tabs:** the order of the deck's tabs, with a preview of its header.

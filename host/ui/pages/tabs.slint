@@ -2,6 +2,17 @@ import { Theme, Glyphs } from "../theme.slint";
 import { Backend } from "../backend.slint";
 import { Card, Glyph, SectionTitle, PushButton } from "../widgets.slint";
 
+// The logo's three bars, as the System tab's icon: 30, 56 and 40 tall, 14
+// wide and 6 apart in the logo's own units. Grey when `dim`.
+component LogoMark inherits Rectangle {
+    in property <bool> dim;
+    width: 16px;
+    height: 16px;
+    Rectangle { x: 0; y: 7px; width: 4px; height: 9px; border-radius: 1px; background: root.dim ? Theme.text-faint : Theme.cyan; }
+    Rectangle { x: 6px; y: 0; width: 4px; height: 16px; border-radius: 1px; background: root.dim ? Theme.text-faint : Theme.green; }
+    Rectangle { x: 12px; y: 5px; width: 4px; height: 11px; border-radius: 1px; background: root.dim ? Theme.text-faint : Theme.orange; }
+}
+
 // A small rounded tag after a tab's name.
 component Tag inherits Rectangle {
     in property <string> text;
@@ -59,10 +70,14 @@ component HeaderPreview inherits Rectangle {
                 padding-right: 14px;
                 spacing: 8px;
                 alignment: center;
-                Glyph {
+                if tab.logo: VerticalLayout {
+                    alignment: center;
+                    LogoMark { dim: i != 0; }
+                }
+                if !tab.logo: Glyph {
                     text: tab.glyph;
                     font-size: 15px;
-                    color: i == 0 ? Theme.text : Theme.text-faint;
+                    color: i == 0 ? tab.color : Theme.text-faint;
                 }
                 if i == 0: Text {
                     text: tab.name;
@@ -142,7 +157,8 @@ export component TabsPage inherits VerticalLayout {
                             background: Theme.sidebar;
                             border-width: 1px;
                             border-color: Theme.border;
-                            Glyph { text: tab.glyph; font-size: 15px; }
+                            if tab.logo: LogoMark { x: 10px; y: 10px; }
+                            if !tab.logo: Glyph { text: tab.glyph; font-size: 15px; color: tab.color; }
                         }
                     }
                     VerticalLayout {
