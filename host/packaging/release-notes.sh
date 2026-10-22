@@ -23,6 +23,9 @@ declare -A heading=(
 )
 declare -A section
 
+# Captured first so a git failure stops the script instead of reading as no commits.
+log=$(git log --no-merges --format='%h%x1f%s%x1f%b%x1e' "$range")
+
 # One record per commit: hash, subject, body, split on unit/record separators.
 while IFS=$'\x1f' read -r -d $'\x1e' hash subject body; do
     hash=${hash#$'\n'}
@@ -44,7 +47,7 @@ while IFS=$'\x1f' read -r -d $'\x1e' hash subject body; do
         entry+=$(printf '%s\n' "$details" | sed 's/^/  /')$'\n'
     fi
     section[$type]+=$entry
-done < <(git log --no-merges --format='%h%x1f%s%x1f%b%x1e' "$range")
+done <<<"$log"
 
 echo "## What's changed"
 echo
