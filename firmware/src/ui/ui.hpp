@@ -19,5 +19,7 @@ void setConnected(bool connected);
 void showToast(const char* text, bool ok);
 // Host notice, such as an available update. Shares the toast pill.
 void showNotice(const char* text);
+// Desktop notification card. A critical one stays until tapped.
+void showNotification(const char* app, const char* summary, const char* body, bool critical);
 
 }  // namespace ui

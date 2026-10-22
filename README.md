@@ -99,6 +99,29 @@ Each button can show a built-in symbol (`icon = "mute"`) or a picture
 images to fit 40×40 and sends them to the device each time it sends the button
 layout. See `host/config.example.toml` for the icon names.
 
+### Desktop notifications
+
+The device can show your desktop notifications too, such as new mail: it dims
+the screen and slides a card down for 8 seconds (tap to dismiss). Critical ones
+take over the whole screen until you tap Dismiss. It's off by default, since
+anyone near your desk can read the display. Turn it on in the config:
+
+```toml
+[notifications]
+enabled = true
+apps = ["Geary"]   # only these apps; leave empty for all
+ignore = []        # never these apps
+body = true        # false shows just the app and title
+```
+
+The host watches the session bus as a monitor, so it works with any desktop:
+it reads the freedesktop `Notify` calls that KDE, XFCE and most apps use, and
+GNOME Shell's `org.gtk.Notifications`. It leaves out low-urgency notifications,
+and holds back the rest while Do Not Disturb is on (Plasma's or GNOME's).
+App names work as the desktop
+shows them or as their desktop file (`org.gnome.Geary`); the log names each
+app as its notifications arrive (`journalctl --user -u nerd-deck | grep notification`).
+
 ### Installing
 
 ```bash

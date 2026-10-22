@@ -17,6 +17,14 @@ removable = true          # also show USB drives / SD cards while mounted
 check = true              # look for a newer release daily and show a notice on the device
 firmware = true           # install this release's device firmware when the device's is older
 
+[notifications]
+enabled = false           # also show desktop notifications (new mail, chat, ...) on the device
+apps = []                 # only these apps, e.g. ["Geary", "Thunderbird"]; empty = all apps
+ignore = []               # never these apps, e.g. ["Spotify"]
+body = true               # false shows just the app and title, not the message text
+# The log names each app as its notifications arrive:
+#   journalctl --user -u nerd-deck | grep notification
+
 # Up to 12 buttons, laid out 4x3 on the Controls tab in this order.
 # Commands run via `sh -c` as the user running nerd-deck.
 #

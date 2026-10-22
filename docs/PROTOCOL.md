@@ -1,4 +1,4 @@
-# nerd-deck wire protocol (v3)
+# nerd-deck wire protocol (v4)
 
 Transport: USB CDC serial (ESP32-S3 USB-Serial-JTAG, `303a:1001`). Baud is
 ignored on native USB.
@@ -15,7 +15,7 @@ Bump `PROTO_VERSION` / `kProtoVersion` together on breaking changes.
 ### `hello`
 Sent on connect. The device replies with its own `hello`.
 ```json
-{"type":"hello","proto":3,"host":"workstation"}
+{"type":"hello","proto":4,"host":"workstation"}
 ```
 
 ### `stats`
@@ -84,6 +84,18 @@ the toast pill with a cyan dot for 8 s. Older firmware ignores it, like any unkn
 {"type":"notify","text":"Update available: nerd-deck 0.3.0"}
 ```
 
+### `notification`
+A desktop notification, such as new mail. The device dims the screen and slides
+a card down from the top with `app`, `summary` and up to two lines of `body`
+(left out when empty or turned off), for 8 s or until tapped. A `critical` one
+takes over the whole screen instead, with a pulsing warning icon, and stays
+until its Dismiss button is tapped. A newer notification replaces the one
+showing. The host sends ASCII only, since the device's fonts have nothing else.
+```json
+{"type":"notification","app":"Geary","summary":"Re: Saturday's race","body":"Sounds good, see you at 9?"}
+{"type":"notification","app":"Thunderbird","summary":"Server certificate expired","critical":true}
+```
+
 ## Device → host
 
 ### `hello`
@@ -92,7 +104,7 @@ hardware the firmware was built for; the host only installs its bundled firmware
 on a matching board. Firmware before v3 doesn't send it, and only ever ran on
 `wt32-sc01-plus`.
 ```json
-{"type":"hello","fw":"0.4.0","proto":3,"board":"wt32-sc01-plus"}
+{"type":"hello","fw":"0.5.0","proto":4,"board":"wt32-sc01-plus"}
 ```
 
 ### `press`
@@ -107,3 +119,4 @@ command for it. The device never sends a command string.
 - **v2**: added the `icon` and `image` button fields and the `image` message.
 - **v3**: the device's `hello` adds `board`, so the host only installs its bundled firmware
   on matching hardware. Also adds the `notify` message.
+- **v4**: adds the `notification` message.

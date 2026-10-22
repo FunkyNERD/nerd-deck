@@ -119,6 +119,10 @@ void handleNotify(JsonObjectConst o) {
     if (*text) ui::showNotice(text);
 }
 
+void handleNotification(JsonObjectConst o) {
+    ui::showNotification(o["app"] | "", o["summary"] | "", o["body"] | "", o["critical"] | false);
+}
+
 void handleLine(const char* line, size_t len) {
     JsonDocument doc;
     if (deserializeJson(doc, line, len)) return;  // ignore garbage / partial lines
@@ -138,6 +142,8 @@ void handleLine(const char* line, size_t len) {
         handleAck(o);
     } else if (strcmp(type, "notify") == 0) {
         handleNotify(o);
+    } else if (strcmp(type, "notification") == 0) {
+        handleNotification(o);
     } else if (strcmp(type, "hello") == 0) {
         sendHello();
     }

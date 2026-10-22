@@ -114,6 +114,36 @@ lv_obj_t* toastDot;
 lv_obj_t* toastLabel;
 lv_timer_t* toastTimer;
 
+// Notification card: dims the screen and slides down from the top; tap to
+// dismiss. A critical notification takes over the whole screen instead.
+constexpr lv_coord_t kNotifW = 456;
+constexpr lv_coord_t kNotifPadH = 16;
+constexpr lv_coord_t kNotifPadTop = 14;
+constexpr lv_coord_t kNotifPadBottom = 16;
+constexpr lv_coord_t kNotifTile = 44;
+constexpr lv_coord_t kNotifTextW = kNotifW - 2 * kNotifPadH - 2 - kNotifTile - 14;
+constexpr lv_coord_t kNotifTimeW = kNotifW - 2 * kNotifPadH - 2;
+constexpr lv_coord_t kNotifY = 10;
+constexpr lv_coord_t kNotifHiddenY = -170;
+constexpr lv_opa_t kNotifScrimOpa = 140;  // 55%
+constexpr uint32_t kNotifMs = 8000;
+lv_obj_t* notifScrim;
+lv_obj_t* notifCard;
+lv_obj_t* notifApp;
+lv_obj_t* notifSummary;
+lv_obj_t* notifBody;
+lv_obj_t* notifTimeBar;  // shrinks to nothing as the card's time runs out
+
+// Critical takeover.
+constexpr lv_coord_t kAlertDisc = 64;
+constexpr lv_coord_t kAlertTextW = 416;
+lv_obj_t* alertScreen;
+lv_obj_t* alertRings[2];  // pulse out from behind the icon, half a beat apart
+lv_obj_t* alertText;
+lv_obj_t* alertApp;
+lv_obj_t* alertSummary;
+lv_obj_t* alertBody;
+lv_obj_t* alertButton;
 void fmtBytes(uint64_t v, char* out, size_t n) {
     static const char* units[] = {"B", "K", "M", "G", "T"};
     double d = static_cast<double>(v);
@@ -654,6 +684,206 @@ void hideWaitScreen() {
     lv_anim_start(&a);
 }
 
+void notifYExec(void* card, int32_t y) { lv_obj_set_y(static_cast<lv_obj_t*>(card), y); }
+
+void notifTimeExec(void* bar, int32_t w) { lv_obj_set_width(static_cast<lv_obj_t*>(bar), w); }
+
+void opaExec(void* obj, int32_t v) {
+    lv_obj_set_style_opa(static_cast<lv_obj_t*>(obj), static_cast<lv_opa_t>(v), 0);
+}
+
+void scrimExec(void* scrim, int32_t v) {
+    lv_obj_set_style_bg_opa(static_cast<lv_obj_t*>(scrim), static_cast<lv_opa_t>(v), 0);
+}
+
+// Fades and slides up into place.
+void riseExec(void* obj, int32_t v) {
+    auto* o = static_cast<lv_obj_t*>(obj);
+    lv_obj_set_style_opa(o, static_cast<lv_opa_t>(v * LV_OPA_COVER / 1000), 0);
+    lv_obj_set_style_translate_y(o, static_cast<lv_coord_t>(10 - v * 10 / 1000), 0);
+}
+
+// One ring: grows from the disc's edge to 1.8x as it fades.
+void ringExec(void* ring, int32_t v) {
+    auto* r = static_cast<lv_obj_t*>(ring);
+    const lv_coord_t size = kAlertDisc + kAlertDisc * 8 * v / 10000;
+    lv_obj_set_size(r, size, size);
+    lv_obj_set_style_border_opa(r, static_cast<lv_opa_t>(LV_OPA_60 * (1000 - v) / 1000), 0);
+}
+
+void animate(void* var, lv_anim_exec_xcb_t exec, int32_t from, int32_t to, uint32_t ms,
+             lv_anim_path_cb_t path = lv_anim_path_ease_out, uint32_t delay = 0,
+             lv_anim_ready_cb_t ready = nullptr) {
+    lv_anim_del(var, exec);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, var);
+    lv_anim_set_exec_cb(&a, exec);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_time(&a, ms);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_path_cb(&a, path);
+    if (ready) lv_anim_set_ready_cb(&a, ready);
+    lv_anim_start(&a);
+}
+
+void dismissNotification() {
+    if (lv_obj_has_flag(notifCard, LV_OBJ_FLAG_HIDDEN)) return;
+    lv_anim_del(notifTimeBar, notifTimeExec);
+    animate(notifCard, notifYExec, lv_obj_get_y(notifCard), kNotifHiddenY, 250, lv_anim_path_ease_in,
+            0, [](lv_anim_t*) {
+                lv_obj_add_flag(notifCard, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(notifScrim, LV_OBJ_FLAG_HIDDEN);
+            });
+    animate(notifScrim, scrimExec, lv_obj_get_style_bg_opa(notifScrim, 0), LV_OPA_TRANSP, 250);
+}
+
+void dismissAlert() {
+    if (lv_obj_has_flag(alertScreen, LV_OBJ_FLAG_HIDDEN)) return;
+    animate(alertScreen, opaExec, lv_obj_get_style_opa(alertScreen, 0), LV_OPA_TRANSP, 200,
+            lv_anim_path_ease_in, 0, [](lv_anim_t*) {
+                lv_obj_add_flag(alertScreen, LV_OBJ_FLAG_HIDDEN);
+                for (lv_obj_t* r : alertRings) lv_anim_del(r, ringExec);
+            });
+}
+
+// Height for up to two lines of `text`, for a LONG_DOT label to cut at.
+lv_coord_t twoLineHeight(const char* text, const lv_font_t* font, lv_coord_t width) {
+    lv_point_t size;
+    lv_txt_get_size(&size, text, font, 0, 0, width, LV_TEXT_FLAG_NONE);
+    const lv_coord_t twoLines = 2 * lv_font_get_line_height(font);
+    return size.y < twoLines ? size.y : twoLines;
+}
+
+void setUpper(lv_obj_t* label, const char* text) {
+    char buf[40];
+    size_t i = 0;
+    for (; text[i] && i < sizeof buf - 1; i++) buf[i] = static_cast<char>(toupper(text[i]));
+    buf[i] = '\0';
+    lv_label_set_text(label, buf);
+}
+
+void buildNotificationCard() {
+    notifScrim = makeRect(lv_layer_top(), kScreenWidth, kScreenHeight, kBg, 0);
+    lv_obj_set_style_bg_opa(notifScrim, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(notifScrim, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(notifScrim, [](lv_event_t*) { dismissNotification(); }, LV_EVENT_CLICKED,
+                        nullptr);
+
+    notifCard = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(notifCard);
+    lv_obj_set_size(notifCard, kNotifW, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(notifCard, lv_color_hex(kCard), 0);
+    lv_obj_set_style_bg_opa(notifCard, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(notifCard, lv_color_hex(0x1D5A63), 0);
+    lv_obj_set_style_border_width(notifCard, 1, 0);
+    lv_obj_set_style_radius(notifCard, 14, 0);
+    lv_obj_set_style_pad_hor(notifCard, kNotifPadH, 0);
+    lv_obj_set_style_pad_top(notifCard, kNotifPadTop, 0);
+    lv_obj_set_style_pad_bottom(notifCard, kNotifPadBottom, 0);
+    lv_obj_set_style_pad_column(notifCard, 14, 0);
+    lv_obj_set_flex_flow(notifCard, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(notifCard, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_align(notifCard, LV_ALIGN_TOP_MID, 0, kNotifHiddenY);
+    noScroll(notifCard);
+    lv_obj_add_flag(notifCard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(notifCard, [](lv_event_t*) { dismissNotification(); }, LV_EVENT_CLICKED,
+                        nullptr);
+
+    lv_obj_t* tile = makeRect(notifCard, kNotifTile, kNotifTile, 0x12333A, 12);
+    lv_obj_center(makeLabel(tile, &lv_font_montserrat_20, kCyan, LV_SYMBOL_BELL));
+
+    lv_obj_t* col = lv_obj_create(notifCard);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, kNotifTextW, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, 4, 0);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
+    noScroll(col);
+
+    notifApp = makeLabel(col, &lv_font_montserrat_12, kCyan, "");
+    lv_obj_set_style_text_letter_space(notifApp, 2, 0);
+    lv_obj_set_width(notifApp, kNotifTextW);
+    lv_label_set_long_mode(notifApp, LV_LABEL_LONG_DOT);
+    notifSummary = makeLabel(col, &lv_font_montserrat_20, kText, "");
+    lv_obj_set_size(notifSummary, kNotifTextW, lv_font_get_line_height(&lv_font_montserrat_20));
+    lv_label_set_long_mode(notifSummary, LV_LABEL_LONG_DOT);
+    notifBody = makeLabel(col, &lv_font_montserrat_14, 0xC3CAD5, "");
+    lv_obj_set_width(notifBody, kNotifTextW);
+    lv_label_set_long_mode(notifBody, LV_LABEL_LONG_DOT);
+
+    notifTimeBar = makeRect(notifCard, kNotifTimeW, 3, kCyan, 2);
+    lv_obj_add_flag(notifTimeBar, LV_OBJ_FLAG_FLOATING);
+    lv_obj_align(notifTimeBar, LV_ALIGN_BOTTOM_LEFT, 0, kNotifPadBottom - 7);
+}
+
+void buildAlertScreen() {
+    alertScreen = makeRect(lv_layer_top(), kScreenWidth, kScreenHeight, 0x140A0C, 0);
+    lv_obj_set_style_opa(alertScreen, LV_OPA_TRANSP, 0);  // faded in by showAlert
+    lv_obj_add_flag(alertScreen, LV_OBJ_FLAG_HIDDEN);
+    noScroll(alertScreen);
+    makeRect(alertScreen, kScreenWidth, 3, kRed, 0);  // stripe, like the header's
+
+    lv_obj_t* col = lv_obj_create(alertScreen);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, kScreenWidth, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(col, 14, 0);
+    lv_obj_add_flag(col, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(col);
+
+    // Rings behind the icon disc; they spill outside its box as they grow.
+    lv_obj_t* icon = lv_obj_create(col);
+    lv_obj_remove_style_all(icon);
+    lv_obj_set_size(icon, kAlertDisc, kAlertDisc);
+    lv_obj_add_flag(icon, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+    lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+    for (lv_obj_t*& ring : alertRings) {
+        ring = lv_obj_create(icon);
+        lv_obj_remove_style_all(ring);
+        lv_obj_set_size(ring, kAlertDisc, kAlertDisc);
+        lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_color(ring, lv_color_hex(kRed), 0);
+        lv_obj_set_style_border_width(ring, 2, 0);
+        lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(ring, LV_ALIGN_CENTER, 0, 0);
+    }
+    lv_obj_t* disc = makeRect(icon, kAlertDisc, kAlertDisc, 0x3A1C1F, LV_RADIUS_CIRCLE);
+    lv_obj_center(makeLabel(disc, &lv_font_montserrat_28, kRed, LV_SYMBOL_WARNING));
+
+    alertText = lv_obj_create(col);
+    lv_obj_remove_style_all(alertText);
+    lv_obj_set_size(alertText, kAlertTextW, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(alertText, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(alertText, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(alertText, 6, 0);
+    lv_obj_clear_flag(alertText, LV_OBJ_FLAG_CLICKABLE);
+
+    alertApp = makeLabel(alertText, &lv_font_montserrat_12, 0xF28B87, "");
+    lv_obj_set_style_text_letter_space(alertApp, 3, 0);
+    alertSummary = makeLabel(alertText, &lv_font_montserrat_28, kText, "");
+    lv_obj_set_size(alertSummary, kAlertTextW, lv_font_get_line_height(&lv_font_montserrat_28));
+    lv_label_set_long_mode(alertSummary, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(alertSummary, LV_TEXT_ALIGN_CENTER, 0);
+    alertBody = makeLabel(alertText, &lv_font_montserrat_14, 0xC3CAD5, "");
+    lv_obj_set_width(alertBody, 380);
+    lv_label_set_long_mode(alertBody, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(alertBody, LV_TEXT_ALIGN_CENTER, 0);
+
+    alertButton = lv_obj_create(col);
+    lv_obj_remove_style_all(alertButton);
+    lv_obj_set_size(alertButton, 200, 44);
+    lv_obj_set_style_radius(alertButton, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(alertButton, lv_color_hex(kRed), 0);
+    lv_obj_set_style_border_width(alertButton, 1, 0);
+    lv_obj_set_style_bg_color(alertButton, lv_color_hex(0x3A1C1F), 0);
+    lv_obj_set_style_bg_opa(alertButton, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_center(makeLabel(alertButton, &lv_font_montserrat_14, kText, "Dismiss"));
+    lv_obj_add_event_cb(alertButton, [](lv_event_t*) { dismissAlert(); }, LV_EVENT_CLICKED, nullptr);
+}
+
 void buildOverlays() {
     buildWaitScreen();
     waitShown = true;  // until the host's first message
@@ -681,6 +911,9 @@ void buildOverlays() {
     toastTimer = lv_timer_create([](lv_timer_t*) { lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN); },
                                  1500, nullptr);
     lv_timer_pause(toastTimer);
+
+    buildNotificationCard();
+    buildAlertScreen();
 }
 
 void renormaliseNet() {
@@ -1007,8 +1240,13 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
 void setConnected(bool connected) {
     if (connected != waitShown) return;
     waitShown = !connected;
-    if (connected) hideWaitScreen();
-    else showWaitScreen();
+    if (connected) {
+        hideWaitScreen();
+    } else {
+        dismissNotification();
+        dismissAlert();
+        showWaitScreen();
+    }
 }
 
 namespace {
@@ -1032,6 +1270,79 @@ void showToast(const char* text, bool ok) {
 void showNotice(const char* text) {
     // Up longer than a button result: nobody is looking at the screen for it.
     showPill(text, kCyan, 0x1D5A63, 8000);
+}
+
+namespace {
+
+void showCard(const char* app, const char* summary, const char* body) {
+    setUpper(notifApp, app);
+    lv_label_set_text(notifSummary, summary);
+    if (*summary) lv_obj_clear_flag(notifSummary, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(notifSummary, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(notifBody, body);
+    if (*body) {
+        lv_obj_set_height(notifBody, twoLineHeight(body, &lv_font_montserrat_14, kNotifTextW));
+        lv_obj_clear_flag(notifBody, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(notifBody, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Dim the screen and slide the card down (or back, if it was leaving).
+    if (lv_obj_has_flag(notifCard, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_set_y(notifCard, kNotifHiddenY);
+        lv_obj_clear_flag(notifCard, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(notifScrim, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_update_layout(notifCard);
+    animate(notifScrim, scrimExec, lv_obj_get_style_bg_opa(notifScrim, 0), kNotifScrimOpa, 250);
+    animate(notifCard, notifYExec, lv_obj_get_y(notifCard), kNotifY, 320);
+    animate(notifTimeBar, notifTimeExec, kNotifTimeW, 0, kNotifMs, lv_anim_path_linear, 0,
+            [](lv_anim_t*) { dismissNotification(); });
+}
+
+void showAlert(const char* app, const char* summary, const char* body) {
+    setUpper(alertApp, app);
+    lv_label_set_text(alertSummary, summary);
+    lv_label_set_text(alertBody, body);
+    if (*body) {
+        lv_obj_set_height(alertBody, twoLineHeight(body, &lv_font_montserrat_14, 380));
+        lv_obj_clear_flag(alertBody, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(alertBody, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // The card would only sit under the takeover, running out unseen.
+    dismissNotification();
+
+    // Fade in, then the text and button rise into place while the rings pulse.
+    lv_obj_clear_flag(alertScreen, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(alertScreen);
+    animate(alertScreen, opaExec, lv_obj_get_style_opa(alertScreen, 0), LV_OPA_COVER, 220);
+    riseExec(alertText, 0);
+    riseExec(alertButton, 0);
+    animate(alertText, riseExec, 0, 1000, 400, lv_anim_path_ease_out, 120);
+    animate(alertButton, riseExec, 0, 1000, 400, lv_anim_path_ease_out, 200);
+    for (size_t i = 0; i < 2; i++) {
+        if (lv_anim_get(alertRings[i], ringExec)) continue;  // already pulsing
+        ringExec(alertRings[i], 1000);  // invisible until its first beat
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, alertRings[i]);
+        lv_anim_set_exec_cb(&a, ringExec);
+        lv_anim_set_values(&a, 0, 1000);
+        lv_anim_set_time(&a, 1400);
+        lv_anim_set_delay(&a, 700 * i);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&a);
+    }
+}
+
+}  // namespace
+
+void showNotification(const char* app, const char* summary, const char* body, bool critical) {
+    if (critical) showAlert(app, summary, body);
+    else showCard(app, summary, body);
 }
 
 }  // namespace ui

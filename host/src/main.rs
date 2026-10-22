@@ -7,11 +7,12 @@ mod firmware;
 mod icons;
 mod images;
 mod mounts;
+mod notifications;
 mod protocol;
 mod updates;
 
 use std::path::PathBuf;
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -82,9 +83,18 @@ fn main() -> Result<()> {
     }
 
     let updates = cfg.updates.check.then(updates::watch);
+    let notifications =
+        cfg.notifications.enabled.then(|| notifications::watch(cfg.notifications.clone()));
     let mut flashing = firmware::Flashing::new(&cfg);
     loop {
-        match run_session(&cfg, &mut collector, updates.as_ref(), &mut flashing) {
+        let session = run_session(
+            &cfg,
+            &mut collector,
+            updates.as_ref(),
+            notifications.as_ref(),
+            &mut flashing,
+        );
+        match session {
             Ok(SessionEnd::Flash(port)) => flashing.flash(&port, usb_info(&cfg, &port)),
             Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
         }
@@ -103,8 +113,14 @@ fn run_session(
     cfg: &Config,
     collector: &mut Collector,
     updates: Option<&updates::Shared>,
+    notifications: Option<&Receiver<notifications::Notification>>,
     flashing: &mut firmware::Flashing,
 ) -> Result<SessionEnd> {
+    // Drop any that came in while the device was away; they're old news.
+    if let Some(rx) = notifications {
+        rx.try_iter().for_each(drop);
+    }
+
     let port = device::find_port(&cfg.device)?;
     let mut conn = Connection::open(&port.name, cfg.device.baud)?;
     log::info!("connected to {}", port.name);
@@ -128,6 +144,15 @@ fn run_session(
             let text = format!("Update available: nerd-deck {}", a.version);
             conn.send(&HostMsg::Notify { text })?;
             notified = a.seq;
+        }
+
+        for n in notifications.into_iter().flat_map(|rx| rx.try_iter()) {
+            conn.send(&HostMsg::Notification {
+                app: n.app,
+                summary: n.summary,
+                body: n.body,
+                critical: n.critical,
+            })?;
         }
 
         // A device that never says hello may be stuck after an interrupted flash.

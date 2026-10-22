@@ -22,6 +22,7 @@ pub struct Config {
     pub device: DeviceConfig,
     pub stats: StatsConfig,
     pub updates: UpdatesConfig,
+    pub notifications: NotificationsConfig,
     #[serde(rename = "button")]
     pub buttons: Vec<ButtonConfig>,
 }
@@ -85,6 +86,25 @@ pub struct UpdatesConfig {
 impl Default for UpdatesConfig {
     fn default() -> Self {
         Self { check: true, firmware: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NotificationsConfig {
+    /// Show desktop notifications on the device too.
+    pub enabled: bool,
+    /// Only these apps, by name or desktop file / app ID. Empty means all.
+    pub apps: Vec<String>,
+    /// Never these apps.
+    pub ignore: Vec<String>,
+    /// Include the notification's body text, not just its title.
+    pub body: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self { enabled: false, apps: vec![], ignore: vec![], body: true }
     }
 }
 
