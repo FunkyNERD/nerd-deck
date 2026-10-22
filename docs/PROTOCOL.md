@@ -30,7 +30,7 @@ if nothing arrives for 3 s.
   "cpu":  {"usage": 12.5, "cores": [10.0, 15.0], "freq_mhz": 3400, "temp": 54.0},
   "mem":  {"used": 8589934592, "total": 34359738368, "swap_used": 0, "swap_total": 8589934592},
   "net":  {"iface": "enp5s0", "rx_bps": 125000, "tx_bps": 4000},
-  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000}],
+  "disks": [{"mount": "/", "used": 100000000000, "total": 500000000000, "removable": false}],
   "battery": {"percent": 62, "charging": true, "state": "charging", "watts": 12.5,
               "minutes": 95, "wh": 56.4, "full_wh": 90.1, "design_wh": 84.3,
               "volts": 12.9, "temp": 31.5, "cycles": 143, "limit": 85,
@@ -38,10 +38,11 @@ if nothing arrives for 3 s.
 }
 ```
 Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
-(left out when no sensor is found). The device shows at most 32 cores and 4 disks.
+(left out when no sensor is found). The device shows at most 32 cores and 4 disks;
+`removable` marks a USB drive or SD card (protocol v5; false when left out).
 `battery` is left out when the host has no battery; with more than one, `percent`
-covers them all. The device only shows the battery indicator when it's present.
-Tapping it opens the battery screen, which shows the rest:
+covers them all. The device only shows the battery reading and the Battery tab
+when it's present. The tab shows the rest:
 - `state`: `charging`, `discharging`, `full`, or `idle` (plugged in but not
   charging, say held at a charge limit).
 - `watts`: into the battery while charging, out of it otherwise. `minutes`: to

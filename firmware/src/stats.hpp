@@ -30,6 +30,7 @@ struct HostStats {
     struct Disk {
         char mount[24];
         uint64_t used, total;
+        bool removable;  // a USB drive or SD card
     } disks[kMaxDisks];
     uint8_t disk_count;
 

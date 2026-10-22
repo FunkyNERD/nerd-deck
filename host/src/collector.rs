@@ -144,6 +144,7 @@ impl Collector {
             mount,
             used: d.total_space() - d.available_space(),
             total: d.total_space(),
+            removable: is_removable(d),
         };
 
         let mut out: Vec<DiskStats> = self

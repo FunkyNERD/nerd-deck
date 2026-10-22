@@ -34,13 +34,26 @@ constexpr uint32_t kOrange = 0xFFA726;
 constexpr uint32_t kRed = 0xEF5350;
 constexpr uint32_t kStripe[] = {kCyan, kGreen, kOrange};
 
-constexpr lv_coord_t kHeaderH = 44;  // 3 px stripe + tab pills
 constexpr lv_coord_t kGap = 8;
+constexpr lv_coord_t kHeaderH = 44;  // 3 px stripe + tab pills
+constexpr lv_coord_t kBodyW = kScreenWidth - 2 * kGap;  // a tab's content box
+constexpr lv_coord_t kBodyH = 265;
 
 const lv_color_t kRxColor = lv_color_hex(kCyan);
 const lv_color_t kTxColor = lv_color_hex(kOrange);
 
-// Header
+// Header: one pill per tab, icon only but for the open tab's, which also
+// shows its name. The Battery tab is left out on hosts without a battery.
+enum Tab : uint8_t { kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls, kTabCount };
+constexpr const char* kTabIcons[kTabCount] = {LV_SYMBOL_HOME, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
+                                              LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
+constexpr const char* kTabNames[kTabCount] = {"System", "Network", "Storage", "Battery", "Controls"};
+lv_obj_t* tabview;
+lv_obj_t* tabPills[kTabCount];
+lv_obj_t* tabPillIcons[kTabCount];
+lv_obj_t* tabPillNames[kTabCount];
+uint16_t currentTab = kTabSystem;
+bool hasBattery = false;
 lv_obj_t* batteryBox;
 lv_obj_t* batteryBolt;
 lv_obj_t* batteryFill;
@@ -81,9 +94,21 @@ uint32_t lastStatsMs = 0;
 // arrive with ~±75 ms jitter, which made a per-sample scroll stall and jump.
 float netPeriodMs = 1000.0f;  // smoothed stats interval = time per scroll step
 bool netScrolling = false;
-lv_obj_t* diskBars[kMaxDisks];
-lv_obj_t* diskLabels[kMaxDisks];
-lv_obj_t* diskUseLabels[kMaxDisks];
+
+// Storage tab: a card per disk, two by two, or full width for two or fewer.
+struct DiskCard {
+    lv_obj_t* card;
+    lv_obj_t* icon;
+    lv_obj_t* mount;
+    lv_obj_t* tag;  // "USB", on removable drives
+    lv_obj_t* percent;
+    lv_obj_t* usage;
+    lv_obj_t* bar;
+    lv_obj_t* free;
+};
+DiskCard diskCards[kMaxDisks];
+lv_obj_t* noDisksLabel;
+uint8_t diskLayout = 0xFF;  // disk count the cards are laid out for
 
 // Controls tab
 lv_obj_t* buttonGrid;
@@ -101,12 +126,10 @@ ButtonSlot slots[kMaxButtons];
 size_t slotCount = 0;
 lv_coord_t tileW = 0, tileH = 0;  // a button's face, once laid out
 
-// Battery screen: opened by tapping the battery in the header.
+// Battery tab.
 constexpr size_t kPowerHistory = 120;      // points on the power chart
 constexpr uint32_t kPowerSampleMs = 5000;  // averaged into one point: 10 minutes shown
 constexpr lv_coord_t kPowerChartMax = 1000;
-lv_obj_t* batScreen;
-lv_obj_t* batPill;
 lv_obj_t* batPercent;
 lv_obj_t* batStatus;
 lv_obj_t* batBar;
@@ -127,7 +150,6 @@ lv_coord_t powerPoints[kPowerHistory];
 size_t powerCount = 0;  // points recorded so far, up to kPowerHistory
 float powerSum = 0;
 uint32_t powerSamples = 0, powerSampleStart = 0;
-bool batShown = false;
 
 // Waiting screen: covers everything while the host isn't connected.
 constexpr uint32_t kWaitMarkColors[] = {kCyan, kGreen, kOrange};
@@ -199,8 +221,6 @@ uint8_t pct(uint64_t used, uint64_t total) {
 
 // Green, then orange from 75%, red from 90%.
 lv_color_t fillColor(uint8_t p) { return lv_color_hex(p >= 90 ? kRed : p >= 75 ? kOrange : kGreen); }
-
-void showBatteryScreen();
 
 void noScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
 
@@ -275,38 +295,83 @@ void animateCpu(int32_t target) {
     lv_anim_start(&a);  // replaces any running animation on the arc
 }
 
-// Tab pills on the left of the header, the stripe above them, and the battery
-// on the right.
-void styleHeader(lv_obj_t* tabview) {
-    lv_obj_t* btns = lv_tabview_get_tab_btns(tabview);
-    lv_obj_set_width(btns, 340);
-    lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btns, 0, 0);
-    lv_obj_set_style_pad_top(btns, 7, 0);
-    lv_obj_set_style_pad_bottom(btns, 3, 0);
-    lv_obj_set_style_pad_left(btns, 8, 0);
-    lv_obj_set_style_pad_right(btns, 0, 0);
-    lv_obj_set_style_pad_column(btns, 4, 0);
+// Shows the open tab's pill as selected, with its name.
+void styleTabPills() {
+    for (uint16_t i = 0; i < kTabCount; i++) {
+        const bool open = i == currentTab;
+        lv_obj_set_style_bg_opa(tabPills[i], open ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_opa(tabPills[i], open ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(tabPillIcons[i], lv_color_hex(open ? kText : kTextFaint), 0);
+        if (open) lv_obj_clear_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
 
-    lv_obj_set_style_radius(btns, LV_RADIUS_CIRCLE, LV_PART_ITEMS);
-    lv_obj_set_style_bg_opa(btns, LV_OPA_TRANSP, LV_PART_ITEMS);
-    lv_obj_set_style_border_width(btns, 0, LV_PART_ITEMS);
-    lv_obj_set_style_text_color(btns, lv_color_hex(kTextFaint), LV_PART_ITEMS);
-    lv_obj_set_style_text_font(btns, &lv_font_montserrat_14, LV_PART_ITEMS);
-    lv_obj_set_style_outline_width(btns, 0, LV_PART_ITEMS | LV_STATE_FOCUS_KEY);
-    const lv_style_selector_t checked = LV_PART_ITEMS | LV_STATE_CHECKED;
-    lv_obj_set_style_bg_color(btns, lv_color_hex(kCard), checked);
-    lv_obj_set_style_bg_opa(btns, LV_OPA_COVER, checked);
-    lv_obj_set_style_border_color(btns, lv_color_hex(kCardBorder), checked);
-    lv_obj_set_style_border_width(btns, 1, checked);
-    lv_obj_set_style_border_side(btns, LV_BORDER_SIDE_FULL, checked);
-    lv_obj_set_style_text_color(btns, lv_color_hex(kText), checked);
+void openTab(uint16_t tab, lv_anim_enable_t anim) {
+    currentTab = tab;
+    lv_tabview_set_act(tabview, tab, anim);
+    styleTabPills();
+}
+
+void onTabPill(lv_event_t* e) {
+    openTab(static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e))), LV_ANIM_ON);
+}
+
+// After a swipe. Without a battery, its tab is skipped in the swipe's direction.
+void onTabSwiped(lv_event_t*) {
+    uint16_t tab = lv_tabview_get_tab_act(tabview);
+    if (tab == currentTab) return;
+    if (tab == kTabBattery && !hasBattery) tab = tab > currentTab ? kTabControls : kTabStorage;
+    if (tab != lv_tabview_get_tab_act(tabview)) openTab(tab, LV_ANIM_ON);
+    else {
+        currentTab = tab;
+        styleTabPills();
+    }
+}
+
+// Tab pills on the left of the header, the stripe above them, and the battery
+// reading on the right. The tabview's own buttons are unused (zero height):
+// its content fills the screen, and each tab's top padding clears the header.
+void buildHeader() {
+    lv_obj_add_event_cb(tabview, onTabSwiped, LV_EVENT_VALUE_CHANGED, nullptr);
 
     for (size_t i = 0; i < 3; i++) {
         lv_obj_t* r = makeRect(tabview, kScreenWidth / 3, 3, kStripe[i], 0);
         lv_obj_add_flag(r, LV_OBJ_FLAG_FLOATING);
         lv_obj_set_pos(r, i * (kScreenWidth / 3), 0);
     }
+
+    lv_obj_t* row = lv_obj_create(tabview);
+    lv_obj_remove_style_all(row);
+    lv_obj_add_flag(row, LV_OBJ_FLAG_FLOATING);
+    lv_obj_set_size(row, LV_SIZE_CONTENT, 34);
+    lv_obj_set_pos(row, kGap, 7);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, 4, 0);
+    noScroll(row);
+    for (uint16_t i = 0; i < kTabCount; i++) {
+        lv_obj_t* pill = lv_obj_create(row);
+        lv_obj_remove_style_all(pill);
+        lv_obj_set_size(pill, LV_SIZE_CONTENT, LV_PCT(100));
+        lv_obj_set_style_min_width(pill, 52, 0);
+        lv_obj_set_style_pad_hor(pill, 14, 0);
+        lv_obj_set_style_radius(pill, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(pill, lv_color_hex(kCard), 0);
+        lv_obj_set_style_border_color(pill, lv_color_hex(kCardBorder), 0);
+        lv_obj_set_style_border_width(pill, 1, 0);
+        lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(pill, 8, 0);
+        noScroll(pill);
+        lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(pill, 5);  // the header's full height
+        lv_obj_add_event_cb(pill, onTabPill, LV_EVENT_CLICKED, reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        tabPills[i] = pill;
+        tabPillIcons[i] = makeLabel(pill, &lv_font_montserrat_16, kTextFaint, kTabIcons[i]);
+        tabPillNames[i] = makeLabel(pill, &lv_font_montserrat_14, kText, kTabNames[i]);
+    }
+    lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);  // until the host reports a battery
+    styleTabPills();
 
     // Battery: bolt (while charging), outline with fill, percentage. Hidden
     // unless the host reports a battery.
@@ -319,10 +384,6 @@ void styleHeader(lv_obj_t* tabview) {
     lv_obj_set_style_pad_column(batteryBox, 5, 0);
     lv_obj_align(batteryBox, LV_ALIGN_TOP_RIGHT, -10, 7);
     lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
-    // Tap for the battery screen.
-    lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(batteryBox, 8);
-    lv_obj_add_event_cb(batteryBox, [](lv_event_t*) { showBatteryScreen(); }, LV_EVENT_CLICKED, nullptr);
 
     batteryBolt = makeLabel(batteryBox, &lv_font_montserrat_12, kGreen, LV_SYMBOL_CHARGE);
 
@@ -440,7 +501,7 @@ void buildNetworkTab(lv_obj_t* tab) {
     txLabel = rateCard(statW + kGap, "#FFA726 " LV_SYMBOL_UPLOAD "#  UP", kOrange);
 
     // Graph card: interface name and peak scale above the scrolling chart.
-    const lv_coord_t chartY = 60 + kGap, chartH = 112;
+    const lv_coord_t chartY = 60 + kGap, chartH = kBodyH - chartY;
     lv_obj_t* chartCard = makeCard(tab, 0, chartY, 464, chartH);
     netTitle = makeCaption(chartCard, "NETWORK");
     netPeakLabel = makeLabel(chartCard, &lv_font_montserrat_12, kTextFaint, "");
@@ -474,27 +535,61 @@ void buildNetworkTab(lv_obj_t* tab) {
     txSeries = lv_chart_add_series(netChart, kTxColor, LV_CHART_AXIS_PRIMARY_Y);
     lv_chart_set_ext_y_array(netChart, rxSeries, rxPoints);
     lv_chart_set_ext_y_array(netChart, txSeries, txPoints);
+}
 
-    // Disks: two per row; each bar is coloured by how full it is.
-    const lv_coord_t disksY = chartY + chartH + kGap;
-    lv_obj_t* disksCard = makeCard(tab, 0, disksY, 464, 265 - disksY);
-    const lv_coord_t diskW = (464 - 2 - 24 - 20) / 2;
+// Lays the disk cards out for `count` disks: two by two for three or four,
+// one per row otherwise.
+void layoutDisks(uint8_t count) {
+    if (count == diskLayout) return;
+    diskLayout = count;
+    const bool grid = count > 2;
+    const lv_coord_t w = grid ? (kBodyW - kGap) / 2 : kBodyW, h = (kBodyH - kGap) / 2;
     for (size_t i = 0; i < kMaxDisks; i++) {
-        const lv_coord_t x = (i % 2) * (diskW + 20), y = (i / 2) * 32;
-        diskLabels[i] = makeLabel(disksCard, &lv_font_montserrat_12, kText, "");
-        lv_obj_set_width(diskLabels[i], diskW / 2);
-        lv_label_set_long_mode(diskLabels[i], LV_LABEL_LONG_DOT);
-        lv_obj_set_pos(diskLabels[i], x, y);
-        diskUseLabels[i] = makeLabel(disksCard, &lv_font_montserrat_12, kTextDim, "");
-        lv_obj_set_width(diskUseLabels[i], diskW);
-        lv_obj_set_style_text_align(diskUseLabels[i], LV_TEXT_ALIGN_RIGHT, 0);
-        lv_obj_set_pos(diskUseLabels[i], x, y);
-        diskBars[i] = makeBar(disksCard, diskW, 6, kGreen);
-        lv_obj_set_pos(diskBars[i], x, y + 19);
-        lv_obj_add_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
+        DiskCard& d = diskCards[i];
+        if (i >= count) {
+            lv_obj_add_flag(d.card, LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        lv_obj_clear_flag(d.card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(d.card, w, h);
+        lv_obj_set_pos(d.card, grid ? (i % 2) * (w + kGap) : 0, (grid ? i / 2 : i) * (h + kGap));
+        lv_obj_set_width(d.mount, w - 2 - 24 - 20 - 44);  // leaves room for the icon and the tag
     }
+    if (count) lv_obj_add_flag(noDisksLabel, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(noDisksLabel, LV_OBJ_FLAG_HIDDEN);
+}
+
+void buildStorageTab(lv_obj_t* tab) {
+    noScroll(tab);
+    for (DiskCard& d : diskCards) {
+        d.card = makeCard(tab, 0, 0, kBodyW, 100);
+        lv_obj_set_style_pad_ver(d.card, 10, 0);
+        d.icon = makeLabel(d.card, &lv_font_montserrat_14, kTextDim, LV_SYMBOL_DRIVE);
+        lv_obj_set_pos(d.icon, 0, 0);
+        d.mount = makeLabel(d.card, &lv_font_montserrat_14, kText, "");
+        lv_label_set_long_mode(d.mount, LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(d.mount, 22, 0);
+        d.tag = makeLabel(d.card, &lv_font_montserrat_12, kTextDim, "USB");
+        lv_obj_set_style_border_color(d.tag, lv_color_hex(kCardBorder), 0);
+        lv_obj_set_style_border_width(d.tag, 1, 0);
+        lv_obj_set_style_radius(d.tag, 6, 0);
+        lv_obj_set_style_pad_hor(d.tag, 6, 0);
+        lv_obj_set_style_pad_ver(d.tag, 1, 0);
+        lv_obj_align(d.tag, LV_ALIGN_TOP_RIGHT, 0, -1);
+        d.percent = makeLabel(d.card, &lv_font_montserrat_28, kText, "");
+        lv_obj_set_pos(d.percent, 0, 22);
+        d.usage = makeLabel(d.card, &lv_font_montserrat_12, kTextDim, "");
+        lv_obj_align(d.usage, LV_ALIGN_TOP_RIGHT, 0, 36);
+        d.bar = makeBar(d.card, LV_PCT(100), 8, kGreen);
+        lv_obj_set_style_radius(d.bar, 4, LV_PART_MAIN);
+        lv_obj_set_style_radius(d.bar, 4, LV_PART_INDICATOR);
+        lv_obj_set_pos(d.bar, 0, 60);
+        d.free = makeLabel(d.card, &lv_font_montserrat_12, kTextFaint, "");
+        lv_obj_set_pos(d.free, 0, 76);
+    }
+    noDisksLabel = makeLabel(tab, &lv_font_montserrat_14, kTextDim, "No disks to show");
+    lv_obj_center(noDisksLabel);
+    layoutDisks(0);
 }
 
 void freeImage(ButtonSlot& slot) {
@@ -1062,7 +1157,18 @@ void onNetSample(float rx, float tx) {
     if (!netScrolling) startNetStep();
 }
 
+// The Battery tab comes and goes with the host's battery; if it goes while
+// open, System opens instead.
+void showBatteryTab(bool show) {
+    if (show == hasBattery) return;
+    hasBattery = show;
+    if (show) lv_obj_clear_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
+    if (!show && currentTab == kTabBattery) openTab(kTabSystem, LV_ANIM_OFF);
+}
+
 void updateBattery(const HostStats& s) {
+    showBatteryTab(s.battery.present);
     if (!s.battery.present) {
         lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
         return;
@@ -1108,70 +1214,15 @@ lv_obj_t* makeDetail(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, const char* c
     return v;
 }
 
-void hideBatteryScreen() {
-    if (!batShown) return;
-    batShown = false;
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, batScreen);
-    lv_anim_set_exec_cb(&a, waitOpaExec);
-    lv_anim_set_values(&a, lv_obj_get_style_opa(batScreen, 0), LV_OPA_TRANSP);
-    lv_anim_set_time(&a, 180);
-    lv_anim_set_ready_cb(&a, [](lv_anim_t*) { lv_obj_add_flag(batScreen, LV_OBJ_FLAG_HIDDEN); });
-    lv_anim_start(&a);
-}
-
-void showBatteryScreen() {
-    if (batShown) return;
-    batShown = true;
-    lv_anim_del(batScreen, waitOpaExec);
-    lv_obj_set_style_opa(batScreen, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(batScreen, LV_OBJ_FLAG_HIDDEN);
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, batScreen);
-    lv_anim_set_exec_cb(&a, waitOpaExec);
-    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_time(&a, 200);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
-}
-
-void buildBatteryScreen() {
-    // Over the tabs, under the overlays (notifications, the waiting screen).
-    batScreen = makeRect(lv_scr_act(), kScreenWidth, kScreenHeight, kBg, 0);
-    lv_obj_add_flag(batScreen, LV_OBJ_FLAG_CLICKABLE);  // keep taps off the tabs below
-    lv_obj_add_flag(batScreen, LV_OBJ_FLAG_HIDDEN);
-    noScroll(batScreen);
-    for (size_t i = 0; i < 3; i++) {
-        lv_obj_t* r = makeRect(batScreen, kScreenWidth / 3, 3, kStripe[i], 0);
-        lv_obj_set_pos(r, i * (kScreenWidth / 3), 0);
-    }
-
-    // Header: back to the tabs, and the state on the right.
-    lv_obj_t* back = lv_obj_create(batScreen);
-    lv_obj_remove_style_all(back);
-    lv_obj_set_size(back, LV_SIZE_CONTENT, 34);
-    lv_obj_set_pos(back, 8, 7);
-    lv_obj_set_style_pad_hor(back, 10, 0);
-    lv_obj_set_style_radius(back, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(back, lv_color_hex(kCard), LV_STATE_PRESSED);
-    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_STATE_PRESSED);
-    lv_obj_set_ext_click_area(back, 6);
-    lv_obj_add_event_cb(back, [](lv_event_t*) { hideBatteryScreen(); }, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t* backLabel = makeLabel(back, &lv_font_montserrat_20, kText, LV_SYMBOL_LEFT "  Battery");
-    lv_obj_center(backLabel);
-
-    batPill = makeLabel(batScreen, &lv_font_montserrat_14, kGreen, "");
-    lv_obj_align(batPill, LV_ALIGN_TOP_RIGHT, -14, 15);
-
-    constexpr lv_coord_t top = kHeaderH + 3;
-    constexpr lv_coord_t leftW = 172, rightX = 8 + leftW + kGap, rightW = kScreenWidth - rightX - 8;
-    constexpr lv_coord_t bodyH = kScreenHeight - top - 8;
+void buildBatteryTab(lv_obj_t* tab) {
+    noScroll(tab);
+    constexpr lv_coord_t top = 0;
+    constexpr lv_coord_t leftW = 172, rightX = leftW + kGap, rightW = kBodyW - rightX;
+    constexpr lv_coord_t bodyH = kBodyH;
 
     // Charge: percentage, what it's doing, a bar with the charge limit marked,
     // and where the power comes from.
-    lv_obj_t* charge = makeCard(batScreen, 8, top, leftW, bodyH);
+    lv_obj_t* charge = makeCard(tab, 0, top, leftW, bodyH);
     makeCaption(charge, "CHARGE");
     batPercent = makeLabel(charge, &lv_font_montserrat_40, kText, "--");
     lv_obj_set_pos(batPercent, 0, 20);
@@ -1195,7 +1246,7 @@ void buildBatteryScreen() {
 
     // Power now, and over the last ten minutes.
     constexpr lv_coord_t powerH = 158;
-    lv_obj_t* power = makeCard(batScreen, rightX, top, rightW, powerH);
+    lv_obj_t* power = makeCard(tab, rightX, top, rightW, powerH);
     makeCaption(power, "POWER");
     batPeak = makeLabel(power, &lv_font_montserrat_12, kTextFaint, "");
     lv_obj_align(batPeak, LV_ALIGN_TOP_RIGHT, 0, 0);
@@ -1225,7 +1276,7 @@ void buildBatteryScreen() {
 
     // Details, two by two.
     const lv_coord_t detailsY = top + powerH + kGap;
-    lv_obj_t* details = makeCard(batScreen, rightX, detailsY, rightW, kScreenHeight - 8 - detailsY);
+    lv_obj_t* details = makeCard(tab, rightX, detailsY, rightW, bodyH - detailsY);
     const lv_coord_t col = (rightW - 26) / 2;
     batHealth = makeDetail(details, 0, 0, "HEALTH");
     batCapacity = makeDetail(details, col, 0, "CAPACITY");
@@ -1260,13 +1311,10 @@ void recordPower(float watts) {
     setTextf(batPeak, "%.0f W  " LV_SYMBOL_BULLET "  10 min", static_cast<double>(peak));
 }
 
-void updateBatteryScreen(const HostStats& s) {
+void updateBatteryTab(const HostStats& s) {
     using State = HostStats::BatteryState;
     const auto& b = s.battery;
-    if (!b.present) {
-        hideBatteryScreen();
-        return;
-    }
+    if (!b.present) return;
     if (!isnan(b.watts)) recordPower(b.watts);
 
     const uint8_t p = b.percent > 100 ? 100 : b.percent;
@@ -1280,26 +1328,18 @@ void updateBatteryScreen(const HostStats& s) {
     if (timed) fmtMinutes(b.minutes, t, sizeof t);
     switch (b.state) {
         case State::Charging:
-            lv_label_set_text(batPill, LV_SYMBOL_CHARGE " Charging");
-            lv_obj_set_style_text_color(batPill, lv_color_hex(kGreen), 0);
-            if (timed && b.limit) snprintf(buf, sizeof buf, "%u%% in %s", static_cast<unsigned>(b.limit), t);
-            else if (timed) snprintf(buf, sizeof buf, "Full in %s", t);
+            if (timed && b.limit) snprintf(buf, sizeof buf, "Charging, %u%% in %s", static_cast<unsigned>(b.limit), t);
+            else if (timed) snprintf(buf, sizeof buf, "Charging, full in %s", t);
             else snprintf(buf, sizeof buf, "Charging");
             break;
         case State::Discharging:
-            lv_label_set_text(batPill, LV_SYMBOL_BATTERY_2 " On battery");
-            lv_obj_set_style_text_color(batPill, lv_color_hex(p <= 20 ? kOrange : kTextDim), 0);
-            if (timed) snprintf(buf, sizeof buf, "%s left", t);
+            if (timed) snprintf(buf, sizeof buf, "On battery, %s left", t);
             else snprintf(buf, sizeof buf, "On battery");
             break;
         case State::Full:
-            lv_label_set_text(batPill, LV_SYMBOL_OK " Full");
-            lv_obj_set_style_text_color(batPill, lv_color_hex(kGreen), 0);
             snprintf(buf, sizeof buf, "Fully charged");
             break;
         case State::Idle:
-            lv_label_set_text(batPill, LV_SYMBOL_CHARGE " Plugged in");
-            lv_obj_set_style_text_color(batPill, lv_color_hex(kCyan), 0);
             if (b.limit && p + 1 >= b.limit) snprintf(buf, sizeof buf, "Held at the %u%% limit", static_cast<unsigned>(b.limit));
             else snprintf(buf, sizeof buf, "Plugged in, not charging");
             break;
@@ -1355,29 +1395,28 @@ void updateBatteryScreen(const HostStats& s) {
 void init() {
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(kBg), 0);
 
-    lv_obj_t* tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, kHeaderH);
+    tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 0);  // the header is drawn by buildHeader()
     lv_obj_set_style_bg_color(tabview, lv_color_hex(kBg), 0);
     lv_obj_set_style_bg_opa(tabview, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
 
-    lv_obj_t* tabs[] = {
-        lv_tabview_add_tab(tabview, LV_SYMBOL_HOME " System"),
-        lv_tabview_add_tab(tabview, LV_SYMBOL_WIFI " Network"),
-        lv_tabview_add_tab(tabview, LV_SYMBOL_KEYBOARD " Controls"),
-    };
-    for (lv_obj_t* tab : tabs) {
-        lv_obj_set_style_pad_all(tab, kGap, 0);
-        lv_obj_set_style_pad_top(tab, 3, 0);
+    // In Tab order.
+    lv_obj_t* tabs[kTabCount];
+    for (uint16_t i = 0; i < kTabCount; i++) {
+        tabs[i] = lv_tabview_add_tab(tabview, kTabNames[i]);
+        lv_obj_set_style_pad_all(tabs[i], kGap, 0);
+        lv_obj_set_style_pad_top(tabs[i], kHeaderH + 3, 0);
     }
-    styleHeader(tabview);
-    buildSystemTab(tabs[0]);
-    buildNetworkTab(tabs[1]);
-    buildControlsTab(tabs[2]);
-    buildBatteryScreen();
+    buildHeader();
+    buildSystemTab(tabs[kTabSystem]);
+    buildNetworkTab(tabs[kTabNetwork]);
+    buildStorageTab(tabs[kTabStorage]);
+    buildBatteryTab(tabs[kTabBattery]);
+    buildControlsTab(tabs[kTabControls]);
     buildOverlays();
 #ifdef NERD_START_TAB
-    // Debug: open on a given tab (0 System, 1 Network, 2 Controls).
-    lv_tabview_set_act(tabview, NERD_START_TAB, LV_ANIM_OFF);
+    // Debug: open on a given tab (0 System, 1 Network, 2 Storage, 3 Battery, 4 Controls).
+    openTab(NERD_START_TAB, LV_ANIM_OFF);
 #endif
 }
 
@@ -1385,7 +1424,7 @@ void updateStats(const HostStats& s) {
     char a[16], b[16], buf[160];
 
     updateBattery(s);
-    updateBatteryScreen(s);
+    updateBatteryTab(s);
 
     // CPU
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
@@ -1442,24 +1481,24 @@ void updateStats(const HostStats& s) {
     onNetSample(static_cast<float>(s.net.rx_bps), static_cast<float>(s.net.tx_bps));
 
     // Disks
-    for (size_t i = 0; i < kMaxDisks; i++) {
-        if (i < s.disk_count) {
-            const auto& d = s.disks[i];
-            const uint8_t p = pct(d.used, d.total);
-            fmtBytes(d.used, a, sizeof a);
-            fmtBytes(d.total, b, sizeof b);
-            lv_label_set_text(diskLabels[i], d.mount);
-            lv_label_set_text_fmt(diskUseLabels[i], "%s / %s", a, b);
-            lv_obj_set_style_bg_color(diskBars[i], fillColor(p), LV_PART_INDICATOR);
-            lv_bar_set_value(diskBars[i], p, LV_ANIM_ON);
-            lv_obj_clear_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(diskLabels[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(diskUseLabels[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(diskBars[i], LV_OBJ_FLAG_HIDDEN);
-        }
+    layoutDisks(s.disk_count);
+    for (size_t i = 0; i < s.disk_count; i++) {
+        const auto& d = s.disks[i];
+        DiskCard& c = diskCards[i];
+        const uint8_t p = pct(d.used, d.total);
+        lv_label_set_text(c.icon, d.removable ? LV_SYMBOL_USB : LV_SYMBOL_DRIVE);
+        lv_label_set_text(c.mount, d.mount);
+        if (d.removable) lv_obj_clear_flag(c.tag, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(c.tag, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text_fmt(c.percent, "%u%%", static_cast<unsigned>(p));
+        lv_obj_set_style_text_color(c.percent, fillColor(p), 0);
+        fmtBytes(d.used, a, sizeof a);
+        fmtBytes(d.total, b, sizeof b);
+        lv_label_set_text_fmt(c.usage, "%s of %s", a, b);
+        lv_obj_set_style_bg_color(c.bar, fillColor(p), LV_PART_INDICATOR);
+        lv_bar_set_value(c.bar, p, LV_ANIM_ON);
+        fmtBytes(d.total > d.used ? d.total - d.used : 0, a, sizeof a);
+        lv_label_set_text_fmt(c.free, "%s free", a);
     }
 }
 

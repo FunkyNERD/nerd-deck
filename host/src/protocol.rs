@@ -139,6 +139,8 @@ pub struct DiskStats {
     pub mount: String,
     pub used: u64,
     pub total: u64,
+    /// A USB drive or SD card.
+    pub removable: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

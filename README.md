@@ -69,7 +69,7 @@ UART on the extension header.
 | `src/main.cpp` | setup/loop |
 | `src/display.cpp` | panel + touch → LVGL drivers |
 | `src/protocol.cpp` | line framing, JSON decode, `hello`/`press` |
-| `src/ui/ui.cpp` | System / Network / Controls tabs, waiting-for-host screen, toasts |
+| `src/ui/ui.cpp` | System / Network / Storage / Battery / Controls tabs, waiting-for-host screen, toasts |
 | `src/config.hpp` | version, limits, timeouts |
 
 ## Host app
@@ -103,14 +103,21 @@ px or more look best, and the label runs across the bottom on a dark band. Any
 button's label can have its own colour (`color = "#FFA726"`). See
 `host/config.example.toml` for the icon names.
 
-### Battery screen
+### Tabs
 
-On a laptop, tap the battery in the device's header for the battery screen:
-charge and what it's doing (time to full or empty, or held at a charge limit),
+The header has a pill per tab: System, Network, Storage, Battery and Controls.
+The open tab's pill shows its name; the others show just an icon. Tap one, or
+swipe between them.
+
+**Storage** shows each disk on a card: how full it is, used of total, and
+what's free. USB drives and SD cards are marked as such.
+
+**Battery**, on a laptop only, shows the charge and what it's doing (time to full or empty, or held at a charge limit),
 power in or out with a chart of the last 10 minutes, the power source (with a
 USB-C charger's wattage), and health, capacity, voltage and temperature. It
 reads `/sys/class/power_supply`; what shows depends on what the battery
-reports. Tap **Battery** at the top left to go back.
+reports. The header's battery reading on the right shows the charge from every
+tab.
 
 ### Desktop notifications
 
@@ -146,7 +153,7 @@ icon) opens a window for everything in the config:
   symbols, searchable), an image from a file, or its command, which **Run
   now** tries on the spot. Add, remove and reorder them.
 - **Stats:** update interval, network interface, battery, and which disks the
-  Network tab shows, in what order.
+  Storage tab shows, in what order.
 - **Notifications:** on or off, which apps (each app that has sent one is
   listed), message text, Do Not Disturb, low-urgency ones, and test
   notifications for the deck.

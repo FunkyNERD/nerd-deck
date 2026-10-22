@@ -6,7 +6,7 @@
 
 namespace ui {
 
-// Build the tab view (System / Network / Controls). Call after display::init().
+// Build the tab view (System / Network / Storage / Battery / Controls). Call after display::init().
 void init();
 
 void updateStats(const HostStats& s);

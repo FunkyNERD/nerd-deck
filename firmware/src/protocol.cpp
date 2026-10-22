@@ -66,6 +66,7 @@ void handleStats(JsonObjectConst o) {
         strlcpy(disk.mount, d["mount"] | "", sizeof disk.mount);
         disk.used = d["used"] | uint64_t(0);
         disk.total = d["total"] | uint64_t(0);
+        disk.removable = d["removable"] | false;
     }
 
     JsonObjectConst battery = o["battery"];
