@@ -1,12 +1,11 @@
 # Builds the host app's .deb and .rpm (host/packaging/build-packages.sh) on every push and
-# pull request, and keeps them as a run artifact. Pushing a version tag also publishes them
-# as a GitHub release:
+# pull request, and keeps them as a run artifact. Publishing a GitHub release also attaches
+# them to that release:
 #
-#   (bump version in host/Cargo.toml, commit)
-#   git tag v1.2.3 && git push origin v1.2.3
+#   (bump version in host/Cargo.toml, commit, push)
+#   then on GitHub: Releases > Draft a new release > new tag v1.2.3 > Publish
 #
-# The tag must match host/Cargo.toml's version. Tags with a suffix (v1.2.3-beta.1) are
-# published as prereleases.
+# The tag must match host/Cargo.toml's version, or the run fails and nothing is attached.
 #
 # Built on Ubuntu 22.04 so the binary runs on anything with glibc 2.35 or newer
 # (Debian 12+, Ubuntu 22.04+, Fedora 36+).
@@ -15,8 +14,9 @@ name: Host packages
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -63,19 +63,13 @@ jobs:
         if: steps.tools-cache.outputs.cache-hit != 'true'
         run: cargo install --locked --root /opt/cargo-tools cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
 
-      - name: Work out the version
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Check the version
+        if: github.event_name == 'release'
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          TAG="${{ github.event.release.tag_name }}"
           CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' host/Cargo.toml | head -1)
-          [ "$VERSION" = "$CARGO_VERSION" ] || {
-            echo "::error::Tag $TAG doesn't match host/Cargo.toml's version $CARGO_VERSION"; exit 1; }
-          PRERELEASE=false
-          case "$VERSION" in *-*) PRERELEASE=true ;; esac
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "PRERELEASE=$PRERELEASE" >> "$GITHUB_ENV"
+          [ "${TAG#v}" = "$CARGO_VERSION" ] || {
+            echo "::error::Release tag $TAG doesn't match host/Cargo.toml's version $CARGO_VERSION"; exit 1; }
 
       - name: Test
         working-directory: host
@@ -90,22 +84,10 @@ jobs:
           name: nerd-deck-packages
           path: host/dist/
 
-      - name: Release notes
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
-          {
-            echo "nerd-deck host app ${VERSION}."
-            echo
-            if [ -n "$PREV" ]; then echo "Changes since ${PREV}:"; git log --pretty='- %s' "${PREV}..${TAG}" -- host; else git log --pretty='- %s' -20 "${TAG}" -- host; fi
-          } > notes.md
-          cat notes.md
-
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Attach to the release
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          name: nerd-deck ${{ env.VERSION }}
-          body_path: notes.md
-          prerelease: ${{ env.PRERELEASE }}
+          # Only adds files; the release's title and notes stay as written on GitHub.
+          tag_name: ${{ github.event.release.tag_name }}
           files: host/dist/*

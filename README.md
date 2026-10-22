@@ -122,9 +122,10 @@ created on first start:
 systemctl --user enable --now nerd-deck
 ```
 
-CI builds both packages on every push (`.github/workflows/host-packages.yml`). To
-cut a release, set the
-version in `host/Cargo.toml`, commit, then push a matching tag such as `v0.2.0`.
+CI builds both packages on every push (`.github/workflows/host-packages.yml`) and
+keeps them as a run artifact. To cut a release, set the version in
+`host/Cargo.toml`, commit and push, then publish a GitHub release with a matching
+tag such as `v0.2.0`. CI attaches the packages to the release a few minutes later.
 To build the packages locally:
 
 ```bash
