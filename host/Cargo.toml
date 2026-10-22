@@ -28,6 +28,7 @@ ureq = { version = "3.5.0", features = ["json"] }
 espflash = { version = "4.6.0", default-features = false, features = ["serialport"] }
 # Desktop notifications off the session bus. 5.x: 6 dropped the blocking API.
 zbus = "5.19.0"
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
 
 [profile.release]
 strip = true
@@ -48,6 +49,7 @@ assets = [
     ["target/release/nerd-deck", "usr/bin/", "755"],
     ["packaging/99-nerd-deck.rules", "usr/lib/udev/rules.d/", "644"],
     ["packaging/nerd-deck.service", "usr/lib/systemd/user/", "644"],
+    ["packaging/nerd-deck-tray.desktop", "etc/xdg/autostart/", "644"],
     ["config.example.toml", "usr/share/doc/nerd-deck/", "644"],
 ]
 
@@ -59,5 +61,6 @@ assets = [
     { source = "target/release/nerd-deck", dest = "/usr/bin/nerd-deck", mode = "755" },
     { source = "packaging/99-nerd-deck.rules", dest = "/usr/lib/udev/rules.d/99-nerd-deck.rules", mode = "644" },
     { source = "packaging/nerd-deck.service", dest = "/usr/lib/systemd/user/nerd-deck.service", mode = "644" },
+    { source = "packaging/nerd-deck-tray.desktop", dest = "/etc/xdg/autostart/nerd-deck-tray.desktop", mode = "644", config = true },
     { source = "config.example.toml", dest = "/usr/share/doc/nerd-deck/config.example.toml", mode = "644", doc = true },
 ]

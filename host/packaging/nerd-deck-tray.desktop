@@ -1,0 +1,13 @@
+# Starts the tray icon at login. The .deb/.rpm install it to /etc/xdg/autostart;
+# host/install.sh rewrites Exec to point at ~/.local/bin and installs it to
+# ~/.config/autostart.
+[Desktop Entry]
+Type=Application
+Name=nerd-deck tray
+Comment=Shows the nerd-deck display's status in the system tray
+Exec=/usr/bin/nerd-deck --tray
+Icon=video-display
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-phase=2

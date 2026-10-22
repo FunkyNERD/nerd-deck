@@ -10,5 +10,6 @@ fi
 cat <<'MSG'
 nerd-deck installed. For each user who wants it:
     systemctl --user enable --now nerd-deck
-It creates ~/.config/nerd-deck/config.toml on first start.
+It creates ~/.config/nerd-deck/config.toml on first start. The tray icon starts
+at the next login (or now: nerd-deck --tray &).
 MSG

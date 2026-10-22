@@ -41,7 +41,7 @@ pub struct Notification {
 
 /// A notification as an app sent it.
 #[derive(Debug, Default)]
-struct Raw {
+pub struct Raw {
     app: String,
     /// The app's desktop file name or app ID, e.g. `org.gnome.Geary`.
     app_id: Option<String>,
@@ -58,12 +58,13 @@ enum Urgency {
     Critical,
 }
 
-/// Watch the session bus on a background thread. Notifications that pass the
-/// config's filters arrive on the returned channel.
-pub fn watch(cfg: NotificationsConfig) -> Receiver<Notification> {
+/// Watch the session bus on a background thread. Notifications arrive on the
+/// returned channel, unfiltered except for Do Not Disturb; `filter` applies
+/// the config, so a reloaded config takes effect at once.
+pub fn watch() -> Receiver<Raw> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || loop {
-        match monitor(&cfg, &tx) {
+        match monitor(&tx) {
             Ok(()) => return, // the receiver is gone
             Err(e) => log::warn!(
                 "desktop notifications: {e:#}; retrying in {}s",
@@ -77,7 +78,7 @@ pub fn watch(cfg: NotificationsConfig) -> Receiver<Notification> {
 
 /// Runs until the bus connection fails (an error) or `tx`'s receiver is
 /// dropped (Ok).
-fn monitor(cfg: &NotificationsConfig, tx: &Sender<Notification>) -> Result<()> {
+fn monitor(tx: &Sender<Raw>) -> Result<()> {
     let bus = Connection::session().context("connecting to the session bus")?;
     // A monitor can't send, so Do Not Disturb is looked up on a second connection.
     let dnd = Connection::session().context("connecting to the session bus")?;
@@ -111,16 +112,11 @@ fn monitor(cfg: &NotificationsConfig, tx: &Sender<Notification>) -> Result<()> {
             }
         };
 
-        if !accepts(cfg, &raw) {
-            log::info!("notification from {:?} (filtered out)", raw.app);
-            continue;
-        }
         if raw.urgency != Urgency::Critical && do_not_disturb(&dnd) {
             log::info!("notification from {:?} (Do Not Disturb)", raw.app);
             continue;
         }
-        log::info!("notification from {:?}", raw.app);
-        if tx.send(prepare(cfg, raw)).is_err() {
+        if tx.send(raw).is_err() {
             return Ok(());
         }
     }
@@ -185,10 +181,21 @@ fn string(v: Option<&OwnedValue>) -> Option<String> {
     }
 }
 
+/// Applies the config: what to show on the deck, if anything.
+pub fn filter(cfg: &NotificationsConfig, n: Raw) -> Option<Notification> {
+    if !accepts(cfg, &n) {
+        log::info!("notification from {:?} (filtered out)", n.app);
+        return None;
+    }
+    log::info!("notification from {:?}", n.app);
+    Some(prepare(cfg, n))
+}
+
 /// The config's app filters. Low-urgency notifications (connection changes,
-/// background jobs and the like) are always left out.
+/// background jobs and the like) are always left out, and so are the tray's
+/// own messages.
 fn accepts(cfg: &NotificationsConfig, n: &Raw) -> bool {
-    if n.urgency == Urgency::Low {
+    if n.urgency == Urgency::Low || n.app == crate::tray::APP_NAME {
         return false;
     }
     let names = app_names(n);

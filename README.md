@@ -87,7 +87,8 @@ cargo run                   # connect and stream (RUST_LOG=debug for more)
 
 On first start the app writes `~/.config/nerd-deck/config.toml` from
 `config.example.toml` (built into the binary). It never overwrites an existing
-config, and it reads the config only at startup, so restart it after editing.
+config. After editing it, choose **Reload config** in the tray (or restart the
+service).
 
 The app finds the device by VID/PID, sends `hello` and the button layout, then
 streams stats. It reconnects automatically if the device is unplugged or reset.
@@ -122,6 +123,30 @@ App names work as the desktop
 shows them or as their desktop file (`org.gnome.Geary`); the log names each
 app as its notifications arrive (`journalctl --user -u nerd-deck | grep notification`).
 
+### Tray icon
+
+`nerd-deck --tray` puts the deck's logo in the system tray: in colour while the
+deck is connected, grey while the service waits for it, faded when the service
+isn't running. Its menu shows the connection and firmware version, sends test
+notifications (normal or critical) to the deck, opens the config for editing
+and reloads it, so changes apply without restarting the service. It starts at
+login (`install.sh` and the packages set that up). GNOME needs the AppIndicator
+extension for a tray; Ubuntu ships it.
+
+The tray is a separate process that talks to the service over D-Bus, so the
+deck keeps working without it. The service owns `io.github.FunkyNERD.NerdDeck`
+on the session bus:
+
+```bash
+busctl --user introspect io.github.FunkyNERD.NerdDeck /io/github/FunkyNERD/NerdDeck
+busctl --user call io.github.FunkyNERD.NerdDeck /io/github/FunkyNERD/NerdDeck \
+    io.github.FunkyNERD.NerdDeck1 TestNotification b false
+```
+
+`Status` returns a dict (connected, port, firmware, version, update, config),
+`Reload` re-reads the config (a broken one is rejected and the old one kept),
+and `StatusChanged` fires when the status changes.
+
 ### Installing
 
 ```bash
@@ -130,13 +155,15 @@ host/install.sh
 
 This builds the device firmware (if PlatformIO is installed) and a release binary
 that bundles it, installs the binary to `~/.local/bin/nerd-deck`,
-installs the udev rule from `host/packaging/` (asks for sudo), and enables a systemd user service that runs with your graphical session.
+installs the udev rule from `host/packaging/` (asks for sudo), enables a systemd user service that runs with your graphical session,
+and starts the tray icon at login.
 Re-running it upgrades in place.
 
 | Option | Effect |
 |---|---|
 | `--no-udev` | skip the udev rule; no sudo needed |
 | `--no-service` | don't install or enable the service |
+| `--no-tray` | don't start the tray icon at login |
 | `--no-firmware` | don't bundle the device firmware; no PlatformIO needed |
 | `--uninstall` | remove the binary, service and udev rule (the config is kept) |
 
@@ -185,7 +212,8 @@ NERD_DECK_FIRMWARE=firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin cargo 
 
 Each release has a `.deb` and an `.rpm` (x86_64, glibc 2.35 or newer: Debian 12+,
 Ubuntu 22.04+, Fedora 36+), with the device firmware bundled. They install the binary to `/usr/bin`, the udev rule,
-the systemd user unit and the example config in `/usr/share/doc/nerd-deck/`. The
+the systemd user unit, the tray autostart entry and the example config in
+`/usr/share/doc/nerd-deck/`. The
 service isn't enabled for anyone, so each user turns it on, and their config is
 created on first start:
 
@@ -212,6 +240,10 @@ host/packaging/build-packages.sh   # writes host/dist/
 
 ## Next steps
 
+- Add a settings window to the tray app (Slint): buttons, notification
+  filters, stats and updates, written back to the config with its comments.
+- Add device settings (brightness, starting tab, screen-off timer), kept on the
+  device across reboots.
 - Add GPU stats (NVML for NVIDIA, `/sys/class/drm` for AMD).
 - Add a host-driven `brightness` message, and a screen-off timer once the host
   has been gone for a while.

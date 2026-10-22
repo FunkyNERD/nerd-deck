@@ -27,7 +27,7 @@ pub struct Config {
     pub buttons: Vec<ButtonConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeviceConfig {
     /// Explicit serial port. When unset, the first port matching vid/pid is used.
@@ -49,7 +49,7 @@ impl Default for DeviceConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StatsConfig {
     pub interval_ms: u64,
@@ -73,7 +73,7 @@ impl Default for StatsConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpdatesConfig {
     /// Check GitHub daily for a newer release and show a notice on the device.
@@ -89,7 +89,7 @@ impl Default for UpdatesConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NotificationsConfig {
     /// Show desktop notifications on the device too.

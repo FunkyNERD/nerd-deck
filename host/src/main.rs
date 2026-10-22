@@ -1,4 +1,5 @@
 mod actions;
+mod api;
 mod battery;
 mod collector;
 mod config;
@@ -9,10 +10,11 @@ mod images;
 mod mounts;
 mod notifications;
 mod protocol;
+mod tray;
 mod updates;
 
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +22,7 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use clap::Parser;
 
+use api::Command;
 use collector::Collector;
 use config::Config;
 use device::Connection;
@@ -52,6 +55,10 @@ struct Cli {
     /// exit. Stop the service first; it holds the port.
     #[arg(long)]
     flash_firmware: bool,
+
+    /// Show the tray icon, which talks to the running service
+    #[arg(long)]
+    tray: bool,
 }
 
 fn main() -> Result<()> {
@@ -61,15 +68,14 @@ fn main() -> Result<()> {
     if cli.list_ports {
         return device::list_ports();
     }
+    if cli.tray {
+        return tray::run();
+    }
 
     let cfg = Config::load(cli.config.as_deref())?;
-    let mut collector = Collector::new(
-        cfg.stats.interface.clone(),
-        cfg.stats.mounts.clone(),
-        cfg.stats.removable,
-    );
 
     if cli.dump {
+        let mut collector = new_collector(&cfg);
         thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         println!("{}", serde_json::to_string_pretty(&HostMsg::Stats(collector.sample()))?);
         return Ok(());
@@ -82,112 +88,259 @@ fn main() -> Result<()> {
         return firmware::flash(&fw, &port.name, usb_info(&cfg, &port));
     }
 
-    let updates = cfg.updates.check.then(updates::watch);
-    let notifications =
-        cfg.notifications.enabled.then(|| notifications::watch(cfg.notifications.clone()));
-    let mut flashing = firmware::Flashing::new(&cfg);
-    loop {
-        let session = run_session(
-            &cfg,
-            &mut collector,
-            updates.as_ref(),
-            notifications.as_ref(),
-            &mut flashing,
-        );
-        match session {
-            Ok(SessionEnd::Flash(port)) => flashing.flash(&port, usb_info(&cfg, &port)),
-            Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
-        }
-        thread::sleep(RECONNECT_DELAY);
-    }
+    Host::new(cli.config, cfg).run()
+}
+
+fn new_collector(cfg: &Config) -> Collector {
+    Collector::new(cfg.stats.interface.clone(), cfg.stats.mounts.clone(), cfg.stats.removable)
 }
 
 /// Why a session ended other than by an error.
 enum SessionEnd {
     /// The port is closed; install the bundled firmware on this device.
     Flash(device::Port),
+    /// The device settings changed; connect again with the new ones.
+    Reconnect,
 }
 
-/// Connect, then stream stats and handle button presses until the link drops.
-fn run_session(
-    cfg: &Config,
-    collector: &mut Collector,
-    updates: Option<&updates::Shared>,
-    notifications: Option<&Receiver<notifications::Notification>>,
-    flashing: &mut firmware::Flashing,
-) -> Result<SessionEnd> {
-    // Drop any that came in while the device was away; they're old news.
-    if let Some(rx) = notifications {
-        rx.try_iter().for_each(drop);
+/// The service: streams stats to the deck, runs its buttons, and answers the
+/// tray over D-Bus.
+struct Host {
+    /// From `--config`; None means the default location.
+    config_path: Option<PathBuf>,
+    cfg: Config,
+    collector: Collector,
+    /// Started once the config turns them on; a reload never stops them, but
+    /// their results are only used while the config says so.
+    updates: Option<updates::Shared>,
+    notifications: Option<Receiver<notifications::Raw>>,
+    flashing: firmware::Flashing,
+    api: api::Service,
+    commands: Receiver<Command>,
+}
+
+impl Host {
+    fn new(config_path: Option<PathBuf>, cfg: Config) -> Self {
+        let (tx, commands) = mpsc::channel();
+        let status = api::Status {
+            version: env!("CARGO_PKG_VERSION").into(),
+            config: config_path
+                .clone()
+                .or_else(Config::default_path)
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            ..Default::default()
+        };
+        let mut host = Self {
+            config_path,
+            collector: new_collector(&cfg),
+            flashing: firmware::Flashing::new(&cfg),
+            cfg,
+            updates: None,
+            notifications: None,
+            api: api::Service::start(status, tx),
+            commands,
+        };
+        host.start_watchers();
+        host
     }
 
-    let port = device::find_port(&cfg.device)?;
-    let mut conn = Connection::open(&port.name, cfg.device.baud)?;
-    log::info!("connected to {}", port.name);
-    let opened = Instant::now();
-
-    conn.send(&HostMsg::Hello {
-        proto: PROTO_VERSION,
-        host: sysinfo::System::host_name().unwrap_or_default(),
-    })?;
-    send_buttons(cfg, &mut conn)?;
-
-    let interval = Duration::from_millis(cfg.stats.interval_ms);
-    let mut next_stats = Instant::now();
-    // The update check's `seq` last shown on the device; 0 = none this session.
-    let mut notified = 0;
-    let mut said_hello = false;
-
-    loop {
-        let available = updates.and_then(|u| u.lock().unwrap().clone());
-        if let Some(a) = available.filter(|a| a.seq != notified) {
-            let text = format!("Update available: nerd-deck {}", a.version);
-            conn.send(&HostMsg::Notify { text })?;
-            notified = a.seq;
+    fn start_watchers(&mut self) {
+        if self.cfg.updates.check && self.updates.is_none() {
+            self.updates = Some(updates::watch());
         }
-
-        for n in notifications.into_iter().flat_map(|rx| rx.try_iter()) {
-            conn.send(&HostMsg::Notification {
-                app: n.app,
-                summary: n.summary,
-                body: n.body,
-                critical: n.critical,
-            })?;
+        if self.cfg.notifications.enabled && self.notifications.is_none() {
+            self.notifications = Some(notifications::watch());
         }
+    }
 
-        // A device that never says hello may be stuck after an interrupted flash.
-        if !said_hello && opened.elapsed() >= HELLO_TIMEOUT {
-            said_hello = true; // only decide once per session
-            if flashing.should_recover(&port) {
-                return Ok(SessionEnd::Flash(port));
+    fn run(mut self) -> Result<()> {
+        loop {
+            match self.run_session() {
+                Ok(SessionEnd::Flash(port)) => {
+                    self.flashing.flash(&port, usb_info(&self.cfg, &port));
+                }
+                Ok(SessionEnd::Reconnect) => {
+                    self.api.update(disconnected);
+                    continue;
+                }
+                Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
             }
-            log::warn!("no hello from the device after {}s", HELLO_TIMEOUT.as_secs());
+            self.api.update(disconnected);
+            self.idle(RECONNECT_DELAY);
         }
+    }
 
-        if Instant::now() >= next_stats {
-            conn.send(&HostMsg::Stats(collector.sample()))?;
-            next_stats += interval;
+    /// Wait between connection attempts, still answering commands.
+    fn idle(&mut self, wait: Duration) {
+        let until = Instant::now() + wait;
+        while let Ok(cmd) = self.commands.recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            match cmd {
+                Command::Reload(reply) => {
+                    let _ = reply.send(self.reload().map(drop).map_err(|e| format!("{e:#}")));
+                }
+                Command::TestNotification { reply, .. } => {
+                    let _ = reply.send(Err("the deck isn't connected".into()));
+                }
+            }
         }
+        // Notifications that came in meanwhile are old news by the time the
+        // deck is back.
+        if let Some(rx) = &self.notifications {
+            rx.try_iter().for_each(drop);
+        }
+    }
 
-        match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
-            Ok(msg) => {
-                if let DeviceMsg::Hello { fw, board, .. } = &msg {
-                    said_hello = true;
-                    // The device rebooted, so it lost any notice.
-                    notified = 0;
-                    if let Some(version) = flashing.should_update(&port, fw, board.as_deref()) {
-                        let text = format!("Updating firmware to {version}...");
-                        conn.send(&HostMsg::Notify { text })?;
-                        // Leave the notice up briefly; the screen freezes while flashing.
-                        thread::sleep(Duration::from_secs(2));
-                        return Ok(SessionEnd::Flash(port));
+    /// Read the config again and apply it. Returns whether the device settings
+    /// changed, which needs a new connection.
+    fn reload(&mut self) -> Result<bool> {
+        let cfg = Config::load(self.config_path.as_deref())?;
+        let device_changed = cfg.device != self.cfg.device;
+        if cfg.stats != self.cfg.stats {
+            self.collector = new_collector(&cfg);
+        }
+        if cfg.updates.firmware != self.cfg.updates.firmware {
+            self.flashing = firmware::Flashing::new(&cfg);
+        }
+        self.cfg = cfg;
+        self.start_watchers();
+        log::info!("reloaded the config");
+        Ok(device_changed)
+    }
+
+    /// Connect, then stream stats and handle button presses and commands until
+    /// the link drops.
+    fn run_session(&mut self) -> Result<SessionEnd> {
+        let port = device::find_port(&self.cfg.device)?;
+        let mut conn = Connection::open(&port.name, self.cfg.device.baud)?;
+        log::info!("connected to {}", port.name);
+        let opened = Instant::now();
+        self.api.update(|s| {
+            s.connected = true;
+            s.port = port.name.clone();
+        });
+
+        conn.send(&HostMsg::Hello {
+            proto: PROTO_VERSION,
+            host: sysinfo::System::host_name().unwrap_or_default(),
+        })?;
+        send_buttons(&self.cfg, &mut conn)?;
+
+        let mut next_stats = Instant::now();
+        // The update check's `seq` last shown on the device; 0 = none this session.
+        let mut notified = 0;
+        let mut said_hello = false;
+
+        loop {
+            let available = self.updates.as_ref().and_then(|u| u.lock().unwrap().clone());
+            let available = available.filter(|_| self.cfg.updates.check);
+            let update = available.as_ref().map(|a| a.version.clone()).unwrap_or_default();
+            self.api.update(|s| s.update = update);
+            if let Some(a) = available.filter(|a| a.seq != notified) {
+                let text = format!("Update available: nerd-deck {}", a.version);
+                conn.send(&HostMsg::Notify { text })?;
+                notified = a.seq;
+            }
+
+            let incoming: Vec<_> = self.notifications.iter().flat_map(|rx| rx.try_iter()).collect();
+            for raw in incoming {
+                if !self.cfg.notifications.enabled {
+                    continue;
+                }
+                if let Some(n) = notifications::filter(&self.cfg.notifications, raw) {
+                    conn.send(&notification(n))?;
+                }
+            }
+
+            while let Ok(cmd) = self.commands.try_recv() {
+                match cmd {
+                    Command::Reload(reply) => match self.reload() {
+                        Ok(device_changed) => {
+                            let _ = reply.send(Ok(()));
+                            if device_changed {
+                                return Ok(SessionEnd::Reconnect);
+                            }
+                            send_buttons(&self.cfg, &mut conn)?;
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(format!("{e:#}")));
+                        }
+                    },
+                    Command::TestNotification { critical, reply } => {
+                        let sent = conn.send(&test_notification(critical));
+                        let _ = reply.send(sent.as_ref().map_err(|e| e.to_string()).copied());
+                        sent?;
                     }
                 }
-                handle(cfg, &mut conn, msg)?
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => bail!("device disconnected"),
+
+            // A device that never says hello may be stuck after an interrupted flash.
+            if !said_hello && opened.elapsed() >= HELLO_TIMEOUT {
+                said_hello = true; // only decide once per session
+                if self.flashing.should_recover(&port) {
+                    return Ok(SessionEnd::Flash(port));
+                }
+                log::warn!("no hello from the device after {}s", HELLO_TIMEOUT.as_secs());
+            }
+
+            if Instant::now() >= next_stats {
+                conn.send(&HostMsg::Stats(self.collector.sample()))?;
+                next_stats += Duration::from_millis(self.cfg.stats.interval_ms);
+            }
+
+            match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
+                Ok(msg) => {
+                    if let DeviceMsg::Hello { fw, board, .. } = &msg {
+                        said_hello = true;
+                        // The device rebooted, so it lost any notice.
+                        notified = 0;
+                        self.api.update(|s| s.firmware = fw.clone());
+                        if let Some(version) =
+                            self.flashing.should_update(&port, fw, board.as_deref())
+                        {
+                            let text = format!("Updating firmware to {version}...");
+                            conn.send(&HostMsg::Notify { text })?;
+                            // Leave the notice up briefly; the screen freezes while flashing.
+                            thread::sleep(Duration::from_secs(2));
+                            return Ok(SessionEnd::Flash(port));
+                        }
+                    }
+                    handle(&self.cfg, &mut conn, msg)?
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => bail!("device disconnected"),
+            }
         }
+    }
+}
+
+fn disconnected(s: &mut api::Status) {
+    s.connected = false;
+    s.port.clear();
+    s.firmware.clear();
+}
+
+fn notification(n: notifications::Notification) -> HostMsg {
+    HostMsg::Notification {
+        app: n.app,
+        summary: n.summary,
+        body: n.body,
+        critical: n.critical,
+    }
+}
+
+fn test_notification(critical: bool) -> HostMsg {
+    let (summary, body) = if critical {
+        ("Critical test notification", "Critical notifications stay on the deck until you tap Dismiss.")
+    } else {
+        ("Test notification", "Notifications show here for 8 seconds. Tap to dismiss.")
+    };
+    HostMsg::Notification {
+        app: "nerd-deck".into(),
+        summary: summary.into(),
+        body: body.into(),
+        critical,
     }
 }
 

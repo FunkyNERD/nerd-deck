@@ -5,6 +5,7 @@
 #   ./install.sh --no-udev     skip the udev rule (no sudo needed)
 #   ./install.sh --no-firmware don't bundle the device firmware (no PlatformIO needed)
 #   ./install.sh --no-service  don't install/enable the systemd user service
+#   ./install.sh --no-tray     don't start the tray icon at login
 #   ./install.sh --uninstall   remove everything this script installed (config is kept)
 
 set -euo pipefail
@@ -13,11 +14,14 @@ HOST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nerd-deck"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 UDEV_RULE=/etc/udev/rules.d/99-nerd-deck.rules
 SERVICE=nerd-deck.service
+TRAY=nerd-deck-tray.desktop
 
 do_udev=1
 do_service=1
+do_tray=1
 do_firmware=1
 uninstall=0
 
@@ -25,10 +29,11 @@ for arg in "$@"; do
     case "$arg" in
         --no-udev) do_udev=0 ;;
         --no-service) do_service=0 ;;
+        --no-tray) do_tray=0 ;;
         --no-firmware) do_firmware=0 ;;
         --uninstall) uninstall=1 ;;
         -h | --help)
-            sed -n '2,9s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
+            sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
         *)
@@ -52,6 +57,10 @@ uninstall() {
     fi
     rm -f "$UNIT_DIR/$SERVICE"
     systemctl --user daemon-reload 2>/dev/null || true
+
+    info "Removing the tray icon"
+    pkill -u "$USER" -f "^[^ ]*nerd-deck --tray" || true
+    rm -f "$AUTOSTART_DIR/$TRAY"
 
     info "Removing $BIN_DIR/nerd-deck"
     rm -f "$BIN_DIR/nerd-deck"
@@ -115,6 +124,17 @@ install_service() {
     systemctl --user restart "$SERVICE"
 }
 
+install_tray() {
+    info "Installing the tray icon to start at login"
+    mkdir -p "$AUTOSTART_DIR"
+    sed "s|^Exec=.*|Exec=$BIN_DIR/nerd-deck --tray|" "$HOST_DIR/packaging/$TRAY" >"$AUTOSTART_DIR/$TRAY"
+    # Restart it now so a re-run picks up the new binary.
+    pkill -u "$USER" -f "^[^ ]*nerd-deck --tray" || true
+    if [[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]]; then
+        setsid -f "$BIN_DIR/nerd-deck" --tray >/dev/null 2>&1
+    fi
+}
+
 if ((uninstall)); then
     uninstall
     exit 0
@@ -125,6 +145,7 @@ check_deps
 install_binary
 ((do_udev)) && install_udev
 ((do_service)) && install_service
+((do_tray)) && install_tray
 
 info "Installed."
 if ((do_service)); then
