@@ -516,6 +516,7 @@ fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
         off_after: d.off_after * 60,
         temp_warm: d.temp_warm,
         temp_hot: d.temp_hot,
+        flip: d.flip,
     })
 }
 

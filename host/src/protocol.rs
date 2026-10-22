@@ -53,6 +53,9 @@ pub enum HostMsg {
         /// °C from which the CPU temperature shows orange, and red.
         temp_warm: u8,
         temp_hot: u8,
+        /// Upside down, for the USB cable on the other side. Added in
+        /// firmware 0.7.0; older firmware ignores it.
+        flip: bool,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.

@@ -133,7 +133,7 @@ showing. The host sends ASCII only, since the device's fonts have nothing else.
 Settings the device keeps in flash, so they apply from power-on, before the host
 connects. Sent after the device's `hello` and whenever they change. Added in v6.
 ```json
-{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85}
+{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false}
 ```
 - `tabs`: the tab order, by `system`, `network`, `storage`, `battery` and
   `controls`. The pills in the header and swiping both follow it. Tabs left out
@@ -150,6 +150,9 @@ connects. Sent after the device's `hello` and whenever they change. Added in v6.
   back wakes it.
 - `temp_warm`, `temp_hot`: °C from which the System tab shows the CPU
   temperature orange, and red. `temp_warm` must be below `temp_hot`.
+- `flip`: turn the picture and touch upside down, for the USB cable on the
+  other side. Added in firmware 0.7.0, without a protocol change; older
+  firmware ignores it.
 
 Fields left out keep the device's stored values.
 

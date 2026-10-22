@@ -141,6 +141,8 @@ export global Backend {
     in property <int> temp-hot;
     callback set-temp-warm(int);
     callback set-temp-hot(int);
+    // Upside down; set through set-flag with "display.flip".
+    in property <bool> flip;
     in property <[TabRow]> tabs;
     callback move-tab(int, int);
     callback reset-tabs();
@@ -148,7 +150,7 @@ export global Backend {
     // Switches, set through set-flag with these keys: "stats.removable",
     // "stats.battery", "notifications.enabled", "notifications.all",
     // "notifications.body", "notifications.dnd", "notifications.skip_low",
-    // "updates.firmware", "updates.check".
+    // "updates.firmware", "updates.check", "display.flip".
     in property <bool> removable;
     in property <bool> battery;
     in property <bool> notify-enabled;

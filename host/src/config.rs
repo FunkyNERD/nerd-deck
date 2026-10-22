@@ -71,6 +71,8 @@ pub struct DisplayConfig {
     /// °C from which the CPU temperature shows orange, and red.
     pub temp_warm: u8,
     pub temp_hot: u8,
+    /// Turn the picture upside down, for the USB cable on the other side.
+    pub flip: bool,
 }
 
 impl Default for DisplayConfig {
@@ -83,6 +85,7 @@ impl Default for DisplayConfig {
             off_after: 0,
             temp_warm: 70,
             temp_hot: 85,
+            flip: false,
         }
     }
 }

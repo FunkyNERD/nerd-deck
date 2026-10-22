@@ -211,6 +211,15 @@ export component DevicePage inherits VerticalLayout {
                 }
             }
             SettingRow {
+                title: "Flip screen";
+                subtitle: "Turns the picture upside down, for the USB cable on the other side";
+                Toggle {
+                    label: "Flip screen";
+                    checked: Backend.flip;
+                    toggled(on) => { Backend.set-flag("display.flip", on); }
+                }
+            }
+            SettingRow {
                 title: "Start on";
                 subtitle: Backend.start-index == 0 ? "Follows the order on Deck tabs"
                     : Backend.start-index == 4 ? "The first tab instead on PCs without a battery"

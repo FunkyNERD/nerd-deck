@@ -25,6 +25,7 @@ dim_after = 0             # minutes untouched before the screen dims; 0 = never
 off_after = 0             # minutes on the waiting screen (PC away) before the screen turns off; 0 = never
 temp_warm = 70            # CPU temperature shows orange from here (°C)
 temp_hot = 85             # and red from here
+flip = false              # upside down, for the USB cable on the other side
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device

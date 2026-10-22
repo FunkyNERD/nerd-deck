@@ -552,6 +552,7 @@ impl State {
         b.set_off_index(index);
         b.set_temp_warm(d.temp_warm.into());
         b.set_temp_hot(d.temp_hot.into());
+        b.set_flip(d.flip);
 
         let opens = if d.start == "first" { order[0] } else { d.start.as_str() };
         let rows: Vec<TabRow> = order

@@ -195,6 +195,7 @@ void handleDisplay(JsonObjectConst o) {
         d.tempWarm = static_cast<uint8_t>(warm);
         d.tempHot = static_cast<uint8_t>(hot);
     }
+    if (o["flip"].is<bool>()) d.flip = o["flip"].as<bool>();
     save(d);
     ui::applyDisplay(d);
 }

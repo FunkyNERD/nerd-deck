@@ -1566,6 +1566,7 @@ void init() {
 }
 
 void applyDisplay(const settings::Display& d) {
+    display::setFlipped(d.flip);
     setTabOrder(d.tabs);
     startTab = d.start;
     if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);

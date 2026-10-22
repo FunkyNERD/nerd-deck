@@ -16,6 +16,9 @@ namespace display {
 namespace {
 
 constexpr int kBufLines = 40;
+// Landscape; the other landscape rotation is upside down.
+constexpr uint8_t kRotation = 1;
+constexpr uint8_t kFlippedRotation = 3;
 
 board::Lcd tft;
 lv_disp_draw_buf_t drawBuf;
@@ -64,7 +67,7 @@ void monitor(lv_disp_drv_t*, uint32_t ms, uint32_t px) {
 void init() {
     board::powerUp();
     tft.init();
-    tft.setRotation(1);  // landscape, USB on the left; use 3 to flip
+    tft.setRotation(kRotation);
     tft.setBrightness(200);
     tft.fillScreen(TFT_BLACK);
 
@@ -92,5 +95,13 @@ void init() {
 }
 
 void setBrightness(uint8_t level) { tft.setBrightness(level); }
+
+void setFlipped(bool flipped) {
+    const uint8_t rotation = flipped ? kFlippedRotation : kRotation;
+    if (tft.getRotation() == rotation) return;
+    tft.setRotation(rotation);  // touch follows the panel's rotation
+    // Redraws the whole area, layers on top included.
+    lv_obj_invalidate(lv_scr_act());
+}
 
 }  // namespace display

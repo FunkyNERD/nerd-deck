@@ -19,6 +19,7 @@ struct Display {
     uint32_t dimAfterS;       // 0 = never
     uint32_t offAfterS;       // on the waiting screen; 0 = never
     uint8_t tempWarm, tempHot;  // °C: the CPU temperature shows orange, then red
+    bool flip;                  // upside down, for the USB cable on the other side
 };
 
 // The tab named `id`, or -1.
