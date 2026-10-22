@@ -187,6 +187,13 @@ host/packaging/build-packages.sh   # writes host/dist/
   has been gone for a while.
 - Add multiple button pages.
 - Report IP addresses on the Network tab.
+- Publish the packages to an APT/RPM repository (Forgejo has package
+  registries), so host updates arrive with system updates instead of a notice.
+- Restart the user service after a package upgrade, so the new host, and the
+  firmware it bundles, take effect without `systemctl --user restart nerd-deck`.
+- Build aarch64 packages as well, for ARM hosts such as a Raspberry Pi.
+- Support more boards: build the firmware for each one and bundle them all. The
+  device already reports its `board`, so the host can pick the matching image.
 
 ## License
 
