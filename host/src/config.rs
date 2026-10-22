@@ -21,6 +21,7 @@ const EXAMPLE: &str = include_str!("../config.example.toml");
 pub struct Config {
     pub device: DeviceConfig,
     pub stats: StatsConfig,
+    pub updates: UpdatesConfig,
     #[serde(rename = "button")]
     pub buttons: Vec<ButtonConfig>,
 }
@@ -68,6 +69,22 @@ impl Default for StatsConfig {
             mounts: vec!["/".into()],
             removable: true,
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UpdatesConfig {
+    /// Check GitHub daily for a newer release and show a notice on the device.
+    pub check: bool,
+    /// Install the device firmware bundled with this build when the device's
+    /// is older (only on the board it's built for).
+    pub firmware: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { check: true, firmware: true }
     }
 }
 

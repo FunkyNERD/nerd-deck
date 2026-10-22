@@ -1,5 +1,6 @@
-# Builds the host app's .deb and .rpm (host/packaging/build-packages.sh) on every push and
-# pull request, and keeps them as a run artifact. Pushing a version tag also publishes them
+# Builds the device firmware, then the host app's .deb and .rpm with that firmware bundled
+# (host/build.rs, host/packaging/build-packages.sh), on every push and pull request, and
+# keeps them as a run artifact. Pushing a version tag also publishes them
 # as a GitHub release, with notes listing every commit since the previous tag
 # (host/packaging/release-notes.sh):
 #
@@ -35,7 +36,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq && apt-get install -y -qq curl ca-certificates git \
-            build-essential pkg-config libudev-dev >/dev/null
+            build-essential pkg-config libudev-dev python3 python3-venv >/dev/null
           curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -63,6 +64,20 @@ jobs:
       - name: Install packaging tools
         if: steps.tools-cache.outputs.cache-hit != 'true'
         run: cargo install --locked --root /opt/cargo-tools cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-platformio-6.2.0-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Build firmware
+        # The merged image (bootloader, partitions, app) the host bundles.
+        run: |
+          python3 -m venv /opt/pio
+          /opt/pio/bin/pip install -q platformio==6.2.0
+          /opt/pio/bin/pio run -d firmware
+          echo "NERD_DECK_FIRMWARE=$GITHUB_WORKSPACE/firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin" >> "$GITHUB_ENV"
 
       - name: Work out the version
         if: startsWith(github.ref, 'refs/tags/')

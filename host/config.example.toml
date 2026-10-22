@@ -13,6 +13,10 @@ interval_ms = 1000
 mounts = ["/", "/home"]   # the device shows up to 4
 removable = true          # also show USB drives / SD cards while mounted
 
+[updates]
+check = true              # look for a newer release daily and show a notice on the device
+firmware = true           # install this release's device firmware when the device's is older
+
 # Up to 12 buttons, laid out 4x3 on the Controls tab in this order.
 # Commands run via `sh -c` as the user running nerd-deck.
 #

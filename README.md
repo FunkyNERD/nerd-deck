@@ -37,6 +37,12 @@ Stop the host service first (`systemctl --user stop nerd-deck`), because it
 holds the serial port. If upload doesn't start, hold **BOOT** while pressing
 **RST** to enter the bootloader.
 
+You don't normally need to flash by hand: the host app bundles the firmware and
+installs it on the device (see [Firmware updates](#firmware-updates)). Each build
+also writes `.pio/build/wt32-sc01-plus/firmware-merged.bin` (bootloader,
+partitions and app in one image, via `merge_firmware.py`), which is what the
+host bundles.
+
 Debug build flags:
 
 ```bash
@@ -92,7 +98,8 @@ layout. See `host/config.example.toml` for the icon names.
 host/install.sh
 ```
 
-This builds a release binary and installs it to `~/.local/bin/nerd-deck`,
+This builds the device firmware (if PlatformIO is installed) and a release binary
+that bundles it, installs the binary to `~/.local/bin/nerd-deck`,
 installs the udev rule from `host/packaging/` (asks for sudo), and enables a systemd user service that runs with your graphical session.
 Re-running it upgrades in place.
 
@@ -100,6 +107,7 @@ Re-running it upgrades in place.
 |---|---|
 | `--no-udev` | skip the udev rule; no sudo needed |
 | `--no-service` | don't install or enable the service |
+| `--no-firmware` | don't bundle the device firmware; no PlatformIO needed |
 | `--uninstall` | remove the binary, service and udev rule (the config is kept) |
 
 Stop the service before flashing firmware, because it holds the serial port:
@@ -110,10 +118,43 @@ systemctl --user stop nerd-deck
 
 Logs: `journalctl --user -u nerd-deck -f`
 
+### Firmware updates
+
+A host built with the firmware bundled (`install.sh` with PlatformIO, and every
+release package) keeps the device up to date. When the device says hello with
+older firmware, the host shows "Updating firmware to …" on the display, resets the
+device into the ESP32-S3's ROM bootloader over the same USB cable, writes the
+new firmware and resets it. It takes about 15 seconds; the stats come back on their
+own.
+
+- **Upgrade only.** A device with the same or newer firmware (say, a dev build
+  you flashed with PlatformIO) is left alone.
+- **Same board only.** The device reports its board in `hello` (protocol v3),
+  and the host only installs firmware built for that board.
+- **Recoverable.** The ROM bootloader can't be overwritten. If a flash is
+  interrupted, the host reflashes the device the next time it connects and gets
+  no hello. It only does that for a device it has seen identify as a nerd-deck
+  before, by USB serial number (kept in `~/.local/state/nerd-deck/devices`).
+- At most two attempts per device each time the host starts, so it can't loop.
+
+Turn it off with `firmware = false` under `[updates]` in the config. To install
+the bundled firmware right away (service stopped):
+
+```bash
+nerd-deck --flash-firmware
+```
+
+To bundle firmware into a build by hand, point `NERD_DECK_FIRMWARE` at a merged
+image; its version and board are read from the image itself:
+
+```bash
+NERD_DECK_FIRMWARE=firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin cargo build --release
+```
+
 ### Packages
 
 Each release has a `.deb` and an `.rpm` (x86_64, glibc 2.35 or newer: Debian 12+,
-Ubuntu 22.04+, Fedora 36+). They install the binary to `/usr/bin`, the udev rule,
+Ubuntu 22.04+, Fedora 36+), with the device firmware bundled. They install the binary to `/usr/bin`, the udev rule,
 the systemd user unit and the example config in `/usr/share/doc/nerd-deck/`. The
 service isn't enabled for anyone, so each user turns it on, and their config is
 created on first start:

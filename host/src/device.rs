@@ -2,11 +2,11 @@ use std::io::{ErrorKind, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use serialport::{SerialPort, SerialPortType};
+use serialport::{SerialPort, SerialPortType, UsbPortInfo};
 
 use crate::config::DeviceConfig;
 use crate::protocol::{DeviceMsg, HostMsg};
@@ -14,19 +14,40 @@ use crate::protocol::{DeviceMsg, HostMsg};
 const READ_TIMEOUT: Duration = Duration::from_millis(200);
 const MAX_LINE: usize = 4096;
 
+/// A serial port to connect to, with its USB identity when it has one.
+#[derive(Debug, Clone)]
+pub struct Port {
+    pub name: String,
+    pub usb: Option<UsbPortInfo>,
+}
+
+impl Port {
+    /// The USB serial number; on the ESP32-S3 it's the chip's MAC, the same in
+    /// the app and the ROM bootloader.
+    pub fn serial(&self) -> Option<&str> {
+        self.usb.as_ref()?.serial_number.as_deref()
+    }
+}
+
 /// Resolve which serial port to use: the configured one, or the first USB
 /// port matching the configured VID/PID.
-pub fn find_port(cfg: &DeviceConfig) -> Result<String> {
-    if let Some(port) = &cfg.port {
-        return Ok(port.clone());
+pub fn find_port(cfg: &DeviceConfig) -> Result<Port> {
+    let ports = serialport::available_ports()?;
+    let usb = |p: &serialport::SerialPortInfo| match &p.port_type {
+        SerialPortType::UsbPort(u) => Some(u.clone()),
+        _ => None,
+    };
+    if let Some(name) = &cfg.port {
+        let usb = ports.iter().find(|p| &p.port_name == name).and_then(usb);
+        return Ok(Port { name: name.clone(), usb });
     }
-    serialport::available_ports()?
-        .into_iter()
-        .find(|p| match &p.port_type {
-            SerialPortType::UsbPort(u) => u.vid == cfg.vid && cfg.pid.is_none_or(|pid| pid == u.pid),
-            _ => false,
+    ports
+        .iter()
+        .find_map(|p| {
+            let u = usb(p)?;
+            (u.vid == cfg.vid && cfg.pid.is_none_or(|pid| pid == u.pid))
+                .then(|| Port { name: p.port_name.clone(), usb: Some(u) })
         })
-        .map(|p| p.port_name)
         .ok_or_else(|| anyhow!("no device with vid {:04x} found", cfg.vid))
 }
 
@@ -53,6 +74,7 @@ pub struct Connection {
     writer: Box<dyn SerialPort>,
     pub rx: Receiver<DeviceMsg>,
     stop: Arc<AtomicBool>,
+    reader: Option<JoinHandle<()>>,
 }
 
 impl Connection {
@@ -66,11 +88,11 @@ impl Connection {
         let (tx, rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_reader = stop.clone();
-        thread::Builder::new()
+        let reader = thread::Builder::new()
             .name("serial-reader".into())
             .spawn(move || read_loop(reader, tx, stop_reader))?;
 
-        Ok(Self { writer: port, rx, stop })
+        Ok(Self { writer: port, rx, stop, reader: Some(reader) })
     }
 
     pub fn send(&mut self, msg: &HostMsg) -> Result<()> {
@@ -84,6 +106,11 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        // Wait (at most READ_TIMEOUT) for the reader's handle to close, so the
+        // port is free to reopen, e.g. by the firmware flasher.
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
 }
 

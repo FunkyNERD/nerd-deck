@@ -3,17 +3,19 @@ mod battery;
 mod collector;
 mod config;
 mod device;
+mod firmware;
 mod icons;
 mod images;
 mod mounts;
 mod protocol;
+mod updates;
 
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine;
 use clap::Parser;
 
@@ -23,6 +25,8 @@ use device::Connection;
 use protocol::{ButtonDef, DeviceMsg, HostMsg, PROTO_VERSION};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// The device says hello on boot and in reply to ours, well within this.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Decoded bytes per `image` message; base64 keeps each line well under the
 /// device's 2 KB limit.
@@ -42,6 +46,11 @@ struct Cli {
     /// Print one stats sample as JSON and exit
     #[arg(long)]
     dump: bool,
+
+    /// Install the bundled device firmware now, whatever the device runs, and
+    /// exit. Stop the service first; it holds the port.
+    #[arg(long)]
+    flash_firmware: bool,
 }
 
 fn main() -> Result<()> {
@@ -65,19 +74,41 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if cli.flash_firmware {
+        let fw = firmware::bundled().context("this build has no bundled firmware")?;
+        let port = device::find_port(&cfg.device)?;
+        log::info!("installing firmware {} on {}", fw.version, port.name);
+        return firmware::flash(&fw, &port.name, usb_info(&cfg, &port));
+    }
+
+    let updates = cfg.updates.check.then(updates::watch);
+    let mut flashing = firmware::Flashing::new(&cfg);
     loop {
-        if let Err(e) = run_session(&cfg, &mut collector) {
-            log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs());
+        match run_session(&cfg, &mut collector, updates.as_ref(), &mut flashing) {
+            Ok(SessionEnd::Flash(port)) => flashing.flash(&port, usb_info(&cfg, &port)),
+            Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
         }
         thread::sleep(RECONNECT_DELAY);
     }
 }
 
+/// Why a session ended other than by an error.
+enum SessionEnd {
+    /// The port is closed; install the bundled firmware on this device.
+    Flash(device::Port),
+}
+
 /// Connect, then stream stats and handle button presses until the link drops.
-fn run_session(cfg: &Config, collector: &mut Collector) -> Result<()> {
-    let path = device::find_port(&cfg.device)?;
-    let mut conn = Connection::open(&path, cfg.device.baud)?;
-    log::info!("connected to {path}");
+fn run_session(
+    cfg: &Config,
+    collector: &mut Collector,
+    updates: Option<&updates::Shared>,
+    flashing: &mut firmware::Flashing,
+) -> Result<SessionEnd> {
+    let port = device::find_port(&cfg.device)?;
+    let mut conn = Connection::open(&port.name, cfg.device.baud)?;
+    log::info!("connected to {}", port.name);
+    let opened = Instant::now();
 
     conn.send(&HostMsg::Hello {
         proto: PROTO_VERSION,
@@ -87,24 +118,69 @@ fn run_session(cfg: &Config, collector: &mut Collector) -> Result<()> {
 
     let interval = Duration::from_millis(cfg.stats.interval_ms);
     let mut next_stats = Instant::now();
+    // The update check's `seq` last shown on the device; 0 = none this session.
+    let mut notified = 0;
+    let mut said_hello = false;
 
     loop {
+        let available = updates.and_then(|u| u.lock().unwrap().clone());
+        if let Some(a) = available.filter(|a| a.seq != notified) {
+            let text = format!("Update available: nerd-deck {}", a.version);
+            conn.send(&HostMsg::Notify { text })?;
+            notified = a.seq;
+        }
+
+        // A device that never says hello may be stuck after an interrupted flash.
+        if !said_hello && opened.elapsed() >= HELLO_TIMEOUT {
+            said_hello = true; // only decide once per session
+            if flashing.should_recover(&port) {
+                return Ok(SessionEnd::Flash(port));
+            }
+            log::warn!("no hello from the device after {}s", HELLO_TIMEOUT.as_secs());
+        }
+
         if Instant::now() >= next_stats {
             conn.send(&HostMsg::Stats(collector.sample()))?;
             next_stats += interval;
         }
 
         match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
-            Ok(msg) => handle(cfg, &mut conn, msg)?,
+            Ok(msg) => {
+                if let DeviceMsg::Hello { fw, board, .. } = &msg {
+                    said_hello = true;
+                    // The device rebooted, so it lost any notice.
+                    notified = 0;
+                    if let Some(version) = flashing.should_update(&port, fw, board.as_deref()) {
+                        let text = format!("Updating firmware to {version}...");
+                        conn.send(&HostMsg::Notify { text })?;
+                        // Leave the notice up briefly; the screen freezes while flashing.
+                        thread::sleep(Duration::from_secs(2));
+                        return Ok(SessionEnd::Flash(port));
+                    }
+                }
+                handle(cfg, &mut conn, msg)?
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => bail!("device disconnected"),
         }
     }
 }
 
+/// espflash picks its reset sequence from the USB PID, so a port with no USB
+/// info (an explicit `port` that isn't USB) gets the configured IDs.
+fn usb_info(cfg: &Config, port: &device::Port) -> serialport::UsbPortInfo {
+    port.usb.clone().unwrap_or(serialport::UsbPortInfo {
+        vid: cfg.device.vid,
+        pid: cfg.device.pid.unwrap_or(0),
+        serial_number: None,
+        manufacturer: None,
+        product: None,
+    })
+}
+
 fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
     match msg {
-        DeviceMsg::Hello { fw, proto } => {
+        DeviceMsg::Hello { fw, proto, .. } => {
             log::info!("device firmware {fw}, protocol v{proto}");
             if proto != PROTO_VERSION {
                 log::warn!("protocol mismatch: host v{PROTO_VERSION}, device v{proto}");

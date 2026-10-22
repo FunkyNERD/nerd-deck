@@ -17,5 +17,7 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
                     const uint8_t* data, size_t len);
 void setConnected(bool connected);
 void showToast(const char* text, bool ok);
+// Host notice, such as an available update. Shares the toast pill.
+void showNotice(const char* text);
 
 }  // namespace ui

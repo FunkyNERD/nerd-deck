@@ -1,6 +1,6 @@
 [package]
 name = "nerd-deck"
-version = "0.2.0"
+version = "0.4.0"
 edition = "2021"
 description = "Streams system stats to a nerd-deck display over USB and runs its button commands"
 license = "MIT"
@@ -23,6 +23,9 @@ serde_json = "1"
 serialport = "4"
 sysinfo = "0.32"
 toml = "0.8"
+# The daily update check against the GitHub releases API.
+ureq = { version = "3.5.0", features = ["json"] }
+espflash = { version = "4.6.0", default-features = false, features = ["serialport"] }
 
 [profile.release]
 strip = true

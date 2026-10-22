@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump together with `kProtoVersion` in firmware/src/config.hpp.
-pub const PROTO_VERSION: u32 = 2;
+pub const PROTO_VERSION: u32 = 3;
 
 /// Messages the host sends to the device.
 #[derive(Debug, Serialize)]
@@ -23,6 +23,10 @@ pub enum HostMsg {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         msg: Option<String>,
+    },
+    /// A notice for the device to show briefly, such as an available update.
+    Notify {
+        text: String,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.
@@ -44,7 +48,13 @@ pub enum HostMsg {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DeviceMsg {
-    Hello { fw: String, proto: u32 },
+    Hello {
+        fw: String,
+        proto: u32,
+        /// Added in v3; older firmware leaves it out.
+        #[serde(default)]
+        board: Option<String>,
+    },
     Press { id: String },
     #[serde(other)]
     Unknown,

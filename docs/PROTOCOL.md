@@ -1,4 +1,4 @@
-# nerd-deck wire protocol (v2)
+# nerd-deck wire protocol (v3)
 
 Transport: USB CDC serial (ESP32-S3 USB-Serial-JTAG, `303a:1001`). Baud is
 ignored on native USB.
@@ -15,7 +15,7 @@ Bump `PROTO_VERSION` / `kProtoVersion` together on breaking changes.
 ### `hello`
 Sent on connect. The device replies with its own `hello`.
 ```json
-{"type":"hello","proto":2,"host":"workstation"}
+{"type":"hello","proto":3,"host":"workstation"}
 ```
 
 ### `stats`
@@ -77,12 +77,22 @@ The result of a `press`. `msg` is optional.
 {"type":"ack","id":"nope","ok":false,"msg":"unknown button"}
 ```
 
+### `notify`
+A notice to show briefly, such as an available update. The device shows `text` in
+the toast pill with a cyan dot for 8 s. Older firmware ignores it, like any unknown type.
+```json
+{"type":"notify","text":"Update available: nerd-deck 0.3.0"}
+```
+
 ## Device → host
 
 ### `hello`
-Sent on boot and in reply to the host's `hello`.
+Sent on boot and in reply to the host's `hello`. `board` identifies the
+hardware the firmware was built for; the host only installs its bundled firmware
+on a matching board. Firmware before v3 doesn't send it, and only ever ran on
+`wt32-sc01-plus`.
 ```json
-{"type":"hello","fw":"0.2.0","proto":2}
+{"type":"hello","fw":"0.4.0","proto":3,"board":"wt32-sc01-plus"}
 ```
 
 ### `press`
@@ -95,3 +105,5 @@ command for it. The device never sends a command string.
 ## Changes
 
 - **v2**: added the `icon` and `image` button fields and the `image` message.
+- **v3**: the device's `hello` adds `board`, so the host only installs its bundled firmware
+  on matching hardware. Also adds the `notify` message.

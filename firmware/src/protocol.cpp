@@ -8,6 +8,10 @@
 #include "stats.hpp"
 #include "ui/ui.hpp"
 
+// The host reads the board and version of the firmware it bundles from this
+// marker in the image (host/build.rs). init() references it so the linker keeps it.
+extern "C" const char kFirmwareId[] = "nerd-deck-firmware:" FW_BOARD ":" FW_VERSION ";";
+
 namespace protocol {
 namespace {
 
@@ -110,6 +114,11 @@ void handleAck(JsonObjectConst o) {
     ui::showToast(text, ok);
 }
 
+void handleNotify(JsonObjectConst o) {
+    const char* text = o["text"] | "";
+    if (*text) ui::showNotice(text);
+}
+
 void handleLine(const char* line, size_t len) {
     JsonDocument doc;
     if (deserializeJson(doc, line, len)) return;  // ignore garbage / partial lines
@@ -127,15 +136,20 @@ void handleLine(const char* line, size_t len) {
         handleImage(o);
     } else if (strcmp(type, "ack") == 0) {
         handleAck(o);
+    } else if (strcmp(type, "notify") == 0) {
+        handleNotify(o);
     } else if (strcmp(type, "hello") == 0) {
         sendHello();
     }
-    // TODO: "brightness", "notify", ... as the protocol grows.
+    // TODO: "brightness", ... as the protocol grows.
 }
 
 }  // namespace
 
-void init() { sendHello(); }
+void init() {
+    asm volatile("" : : "r"(kFirmwareId));
+    sendHello();
+}
 
 void poll() {
     while (Serial.available() > 0) {
@@ -162,6 +176,7 @@ void sendHello() {
     doc["type"] = "hello";
     doc["fw"] = FW_VERSION;
     doc["proto"] = kProtoVersion;
+    doc["board"] = FW_BOARD;
     send(doc);
 }
 

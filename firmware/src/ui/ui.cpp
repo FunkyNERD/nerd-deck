@@ -1006,13 +1006,27 @@ void setConnected(bool connected) {
     else showWaitScreen();
 }
 
-void showToast(const char* text, bool ok) {
+namespace {
+
+void showPill(const char* text, uint32_t dot, uint32_t border, uint32_t ms) {
     lv_label_set_text(toastLabel, text);
-    lv_obj_set_style_bg_color(toastDot, lv_color_hex(ok ? kGreen : kRed), 0);
-    lv_obj_set_style_border_color(toast, lv_color_hex(ok ? 0x2E6B3A : 0x7A2E2E), 0);
+    lv_obj_set_style_bg_color(toastDot, lv_color_hex(dot), 0);
+    lv_obj_set_style_border_color(toast, lv_color_hex(border), 0);
     lv_obj_clear_flag(toast, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_set_period(toastTimer, ms);
     lv_timer_reset(toastTimer);
     lv_timer_resume(toastTimer);
+}
+
+}  // namespace
+
+void showToast(const char* text, bool ok) {
+    showPill(text, ok ? kGreen : kRed, ok ? 0x2E6B3A : 0x7A2E2E, 1500);
+}
+
+void showNotice(const char* text) {
+    // Up longer than a button result: nobody is looking at the screen for it.
+    showPill(text, kCyan, 0x1D5A63, 8000);
 }
 
 }  // namespace ui

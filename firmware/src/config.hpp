@@ -3,10 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.4.0"
+// Sent in `hello`. The host only installs its bundled firmware on this board.
+#define FW_BOARD "wt32-sc01-plus"
 
 // Bump together with PROTO_VERSION in host/src/protocol.rs.
-constexpr uint32_t kProtoVersion = 2;
+constexpr uint32_t kProtoVersion = 3;
 
 constexpr int kScreenWidth = 480;
 constexpr int kScreenHeight = 320;
