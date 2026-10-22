@@ -37,8 +37,9 @@ skip_low = true           # leave out low-urgency ones (connection changes and t
 #           audio video play pause stop prev next mute volume_mid volume_max
 #           power settings home refresh keyboard wifi bluetooth usb bell
 #           envelope file directory save edit trash eye_open eye_close ...
-#   image = a PNG/JPEG/BMP, scaled to fit 40x40. `~/` works; relative paths
-#           are relative to this file.
+#   image = a PNG/JPEG/BMP that fills the whole button, cropped to fit. `~/`
+#           works; relative paths are relative to this file.
+# and its label can have a colour: color = "#FFA726"
 
 [[button]]
 id = "lock"

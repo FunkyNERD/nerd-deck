@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use serialport::{SerialPort, SerialPortType, UsbPortInfo};
@@ -73,6 +73,9 @@ pub fn list_ports() -> Result<()> {
 pub struct Connection {
     writer: Box<dyn SerialPort>,
     pub rx: Receiver<DeviceMsg>,
+    /// Image results (id, ok), kept apart so waiting for one doesn't swallow
+    /// presses or a hello.
+    images: Receiver<(String, bool)>,
     stop: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
 }
@@ -86,13 +89,33 @@ impl Connection {
         let reader = port.try_clone().context("cloning serial port")?;
 
         let (tx, rx) = mpsc::channel();
+        let (images_tx, images) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_reader = stop.clone();
         let reader = thread::Builder::new()
             .name("serial-reader".into())
-            .spawn(move || read_loop(reader, tx, stop_reader))?;
+            .spawn(move || read_loop(reader, tx, images_tx, stop_reader))?;
 
-        Ok(Self { writer: port, rx, stop, reader: Some(reader) })
+        Ok(Self { writer: port, rx, images, stop, reader: Some(reader) })
+    }
+
+    /// Forget image results from earlier sends.
+    pub fn clear_image_results(&self) {
+        self.images.try_iter().for_each(drop);
+    }
+
+    /// Wait for the device's result for image `id`: Some(ok), or None if none
+    /// arrives within `timeout`.
+    pub fn image_result(&self, id: &str, timeout: Duration) -> Option<bool> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.checked_duration_since(Instant::now())?;
+            match self.images.recv_timeout(left) {
+                Ok((got, ok)) if got == id => return Some(ok),
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
     }
 
     pub fn send(&mut self, msg: &HostMsg) -> Result<()> {
@@ -114,7 +137,12 @@ impl Drop for Connection {
     }
 }
 
-fn read_loop(mut port: Box<dyn SerialPort>, tx: Sender<DeviceMsg>, stop: Arc<AtomicBool>) {
+fn read_loop(
+    mut port: Box<dyn SerialPort>,
+    tx: Sender<DeviceMsg>,
+    images: Sender<(String, bool)>,
+    stop: Arc<AtomicBool>,
+) {
     let mut buf = Vec::with_capacity(MAX_LINE);
     let mut chunk = [0u8; 256];
 
@@ -138,6 +166,9 @@ fn read_loop(mut port: Box<dyn SerialPort>, tx: Sender<DeviceMsg>, stop: Arc<Ato
             }
             // The ESP32 ROM/bootloader may print plain text on reset; skip it.
             match serde_json::from_str::<DeviceMsg>(line) {
+                Ok(DeviceMsg::Image { id, ok }) => {
+                    let _ = images.send((id, ok));
+                }
                 Ok(msg) => {
                     if tx.send(msg).is_err() {
                         return;

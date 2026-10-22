@@ -148,8 +148,23 @@ struct Button {
     icon: Option<String>,
     image: Option<String>,
     command: String,
+    /// "#RRGGBB"; the deck's default when None.
+    color: Option<String>,
     /// Added in this window; its ID follows its label until the window closes.
     fresh: bool,
+}
+
+/// The deck's label colour when a button doesn't set one.
+const DEFAULT_LABEL: u32 = 0xECEFF4;
+
+/// The picker's presets: the deck's palette first, then common colours.
+const SWATCHES: [u32; 14] = [
+    0xECEFF4, 0xFFFFFF, 0xC3CAD5, 0x8792A2, 0x26C6DA, 0x66BB6A, 0xFFA726, 0xEF5350, 0xFFEE58, 0x42A5F5,
+    0xAB47BC, 0xEC407A, 0x26A69A, 0x0B0E13,
+];
+
+fn slint_color(rgb: u32) -> slint::Color {
+    slint::Color::from_rgb_u8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
 struct State {
@@ -195,6 +210,7 @@ impl State {
                     icon: b.icon.clone(),
                     image: b.image.as_ref().map(|p| p.display().to_string()),
                     command: b.command.clone(),
+                    color: b.color.as_deref().and_then(config::parse_color).map(|c| format!("#{c:06X}")),
                     fresh: false,
                 })
             })
@@ -336,6 +352,9 @@ impl State {
             image_path: b.image.unwrap_or_default().into(),
             command: b.command.into(),
             empty: false,
+            has_color: b.color.is_some(),
+            color: slint_color(b.color.as_deref().and_then(config::parse_color).unwrap_or(DEFAULT_LABEL)),
+            color_hex: b.color.unwrap_or_default().into(),
         }
     }
 
@@ -567,6 +586,9 @@ fn write_buttons(doc: &mut DocumentMut, buttons: &[Option<Button>]) {
             (Kind::Image, _, Some(image)) => fields.push(("image", image)),
             _ => {}
         }
+        if let Some(color) = &b.color {
+            fields.push(("color", color));
+        }
         fields.push(("command", &b.command));
         // Keys in the order the file had them; new ones after.
         let rank = |key: &str| prev.and_then(|p| p.iter().position(|(k, _)| k == key)).unwrap_or(usize::MAX);
@@ -753,6 +775,9 @@ thread_local! {
 fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     let b = ui.global::<Backend>();
     state.borrow_mut().refresh_buttons(ui);
+    let swatches: Vec<Swatch> =
+        SWATCHES.iter().map(|&c| Swatch { color: slint_color(c), hex: format!("#{c:06X}").into() }).collect();
+    b.set_swatches(ModelRc::new(VecModel::from(swatches)));
 
     // Each handler gets the window and the state, and runs on the UI thread.
     macro_rules! on {
@@ -780,6 +805,7 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             icon: Some("bell".into()),
             image: None,
             command: String::new(),
+            color: None,
             fresh: true,
         });
         ui.global::<Backend>().set_selected(slot as i32);
@@ -858,6 +884,22 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         if let Some(b) = st.buttons[slot as usize].as_mut() {
             b.kind = Kind::Icon;
             b.icon = Some(name.to_string());
+        }
+        st.refresh_buttons(&ui);
+        st.save(&ui);
+    });
+    on!(on_set_color, |ui, st, slot, text| {
+        let text = text.trim();
+        let color = if text.is_empty() {
+            None
+        } else {
+            match config::parse_color(text) {
+                Some(rgb) => Some(format!("#{rgb:06X}")),
+                None => return problem(&ui, format!("{text:?} isn't a colour like #FFAA00")),
+            }
+        };
+        if let Some(b) = st.buttons[slot as usize].as_mut() {
+            b.color = color;
         }
         st.refresh_buttons(&ui);
         st.save(&ui);
@@ -1104,6 +1146,7 @@ mod tests {
             icon: Some(icon.into()),
             image: None,
             command: "true".into(),
+            color: None,
             fresh: false,
         })
     }
@@ -1139,6 +1182,7 @@ mod tests {
                     icon: b.icon.clone(),
                     image: None,
                     command: b.command.clone(),
+                    color: None,
                     fresh: false,
                 })
             })

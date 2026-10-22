@@ -12,5 +12,7 @@ bool isConnected();
 
 void sendHello();
 void sendPress(const char* id);
+// An `image` finished arriving (ok) or was dropped after a lost chunk.
+void sendImageResult(const char* id, bool ok);
 
 }  // namespace protocol

@@ -2,6 +2,8 @@
 
 #include <ctype.h>
 #include <esp_heap_caps.h>
+#include <math.h>
+#include <stdarg.h>
 #include <lvgl.h>
 #include <stdio.h>
 #include <string.h>
@@ -89,6 +91,7 @@ lv_obj_t* noButtonsLabel;
 struct ButtonSlot {
     ButtonDef def;
     lv_obj_t* btn;
+    lv_obj_t* label;
     lv_obj_t* img;      // created once all pixels are in
     lv_img_dsc_t dsc;   // points at `pixels`
     uint8_t* pixels;
@@ -96,6 +99,35 @@ struct ButtonSlot {
 };
 ButtonSlot slots[kMaxButtons];
 size_t slotCount = 0;
+lv_coord_t tileW = 0, tileH = 0;  // a button's face, once laid out
+
+// Battery screen: opened by tapping the battery in the header.
+constexpr size_t kPowerHistory = 120;      // points on the power chart
+constexpr uint32_t kPowerSampleMs = 5000;  // averaged into one point: 10 minutes shown
+constexpr lv_coord_t kPowerChartMax = 1000;
+lv_obj_t* batScreen;
+lv_obj_t* batPill;
+lv_obj_t* batPercent;
+lv_obj_t* batStatus;
+lv_obj_t* batBar;
+lv_obj_t* batLimitMark;
+lv_obj_t* batLimitLabel;
+lv_obj_t* batSource;
+lv_obj_t* batWatts;
+lv_obj_t* batWattsSub;
+lv_obj_t* batPeak;
+lv_obj_t* batChart;
+lv_chart_series_t* batSeries;
+lv_obj_t* batHealth;
+lv_obj_t* batCapacity;
+lv_obj_t* batVolts;
+lv_obj_t* batTemp;
+float powerHist[kPowerHistory];
+lv_coord_t powerPoints[kPowerHistory];
+size_t powerCount = 0;  // points recorded so far, up to kPowerHistory
+float powerSum = 0;
+uint32_t powerSamples = 0, powerSampleStart = 0;
+bool batShown = false;
 
 // Waiting screen: covers everything while the host isn't connected.
 constexpr uint32_t kWaitMarkColors[] = {kCyan, kGreen, kOrange};
@@ -167,6 +199,8 @@ uint8_t pct(uint64_t used, uint64_t total) {
 
 // Green, then orange from 75%, red from 90%.
 lv_color_t fillColor(uint8_t p) { return lv_color_hex(p >= 90 ? kRed : p >= 75 ? kOrange : kGreen); }
+
+void showBatteryScreen();
 
 void noScroll(lv_obj_t* obj) { lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE); }
 
@@ -284,8 +318,11 @@ void styleHeader(lv_obj_t* tabview) {
     lv_obj_set_flex_align(batteryBox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(batteryBox, 5, 0);
     lv_obj_align(batteryBox, LV_ALIGN_TOP_RIGHT, -10, 7);
-    lv_obj_clear_flag(batteryBox, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
+    // Tap for the battery screen.
+    lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(batteryBox, 8);
+    lv_obj_add_event_cb(batteryBox, [](lv_event_t*) { showBatteryScreen(); }, LV_EVENT_CLICKED, nullptr);
 
     batteryBolt = makeLabel(batteryBox, &lv_font_montserrat_12, kGreen, LV_SYMBOL_CHARGE);
 
@@ -476,6 +513,16 @@ void freeImage(ButtonSlot& slot) {
 void onButtonClicked(lv_event_t* e) {
     const auto idx = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
     if (idx < slotCount) protocol::sendPress(slots[idx].def.id);
+}
+
+// A full-face image darkens while pressed; the button's own pressed colours
+// are hidden under it.
+void onImagePress(lv_event_t* e) {
+    const auto idx = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    if (idx >= slotCount || !slots[idx].img) return;
+    const bool down = lv_event_get_code(e) == LV_EVENT_PRESSED;
+    lv_obj_set_style_img_recolor(slots[idx].img, lv_color_black(), 0);
+    lv_obj_set_style_img_recolor_opa(slots[idx].img, down ? LV_OPA_40 : LV_OPA_TRANSP, 0);
 }
 
 void buildControlsTab(lv_obj_t* tab) {
@@ -1031,6 +1078,278 @@ void updateBattery(const HostStats& s) {
     lv_obj_clear_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
 }
 
+
+// ---- Battery screen ----
+
+// Like lv_label_set_text_fmt, but with C's printf, which can format floats
+// (LVGL's own can't, as configured).
+void setTextf(lv_obj_t* label, const char* fmt, ...) {
+    char buf[96];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof buf, fmt, args);
+    va_end(args);
+    lv_label_set_text(label, buf);
+}
+
+// "1 h 05 min" or "25 min".
+void fmtMinutes(int32_t minutes, char* out, size_t n) {
+    if (minutes >= 60) snprintf(out, n, "%d h %02d min", static_cast<int>(minutes / 60), static_cast<int>(minutes % 60));
+    else snprintf(out, n, "%d min", static_cast<int>(minutes));
+}
+
+// One labelled value in the details card.
+lv_obj_t* makeDetail(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, const char* caption) {
+    lv_obj_t* c = makeCaption(parent, caption);
+    lv_obj_set_pos(c, x, y);
+    lv_obj_t* v = makeLabel(parent, &lv_font_montserrat_14, kText, "--");
+    lv_label_set_recolor(v, true);
+    lv_obj_set_pos(v, x, y + 17);
+    return v;
+}
+
+void hideBatteryScreen() {
+    if (!batShown) return;
+    batShown = false;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, batScreen);
+    lv_anim_set_exec_cb(&a, waitOpaExec);
+    lv_anim_set_values(&a, lv_obj_get_style_opa(batScreen, 0), LV_OPA_TRANSP);
+    lv_anim_set_time(&a, 180);
+    lv_anim_set_ready_cb(&a, [](lv_anim_t*) { lv_obj_add_flag(batScreen, LV_OBJ_FLAG_HIDDEN); });
+    lv_anim_start(&a);
+}
+
+void showBatteryScreen() {
+    if (batShown) return;
+    batShown = true;
+    lv_anim_del(batScreen, waitOpaExec);
+    lv_obj_set_style_opa(batScreen, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(batScreen, LV_OBJ_FLAG_HIDDEN);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, batScreen);
+    lv_anim_set_exec_cb(&a, waitOpaExec);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_time(&a, 200);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+void buildBatteryScreen() {
+    // Over the tabs, under the overlays (notifications, the waiting screen).
+    batScreen = makeRect(lv_scr_act(), kScreenWidth, kScreenHeight, kBg, 0);
+    lv_obj_add_flag(batScreen, LV_OBJ_FLAG_CLICKABLE);  // keep taps off the tabs below
+    lv_obj_add_flag(batScreen, LV_OBJ_FLAG_HIDDEN);
+    noScroll(batScreen);
+    for (size_t i = 0; i < 3; i++) {
+        lv_obj_t* r = makeRect(batScreen, kScreenWidth / 3, 3, kStripe[i], 0);
+        lv_obj_set_pos(r, i * (kScreenWidth / 3), 0);
+    }
+
+    // Header: back to the tabs, and the state on the right.
+    lv_obj_t* back = lv_obj_create(batScreen);
+    lv_obj_remove_style_all(back);
+    lv_obj_set_size(back, LV_SIZE_CONTENT, 34);
+    lv_obj_set_pos(back, 8, 7);
+    lv_obj_set_style_pad_hor(back, 10, 0);
+    lv_obj_set_style_radius(back, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(back, lv_color_hex(kCard), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_ext_click_area(back, 6);
+    lv_obj_add_event_cb(back, [](lv_event_t*) { hideBatteryScreen(); }, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* backLabel = makeLabel(back, &lv_font_montserrat_20, kText, LV_SYMBOL_LEFT "  Battery");
+    lv_obj_center(backLabel);
+
+    batPill = makeLabel(batScreen, &lv_font_montserrat_14, kGreen, "");
+    lv_obj_align(batPill, LV_ALIGN_TOP_RIGHT, -14, 15);
+
+    constexpr lv_coord_t top = kHeaderH + 3;
+    constexpr lv_coord_t leftW = 172, rightX = 8 + leftW + kGap, rightW = kScreenWidth - rightX - 8;
+    constexpr lv_coord_t bodyH = kScreenHeight - top - 8;
+
+    // Charge: percentage, what it's doing, a bar with the charge limit marked,
+    // and where the power comes from.
+    lv_obj_t* charge = makeCard(batScreen, 8, top, leftW, bodyH);
+    makeCaption(charge, "CHARGE");
+    batPercent = makeLabel(charge, &lv_font_montserrat_40, kText, "--");
+    lv_obj_set_pos(batPercent, 0, 20);
+    batStatus = makeLabel(charge, &lv_font_montserrat_12, kTextDim, "");
+    lv_obj_set_width(batStatus, leftW - 26);
+    lv_label_set_long_mode(batStatus, LV_LABEL_LONG_WRAP);
+    lv_obj_set_pos(batStatus, 0, 70);
+    const lv_coord_t barW = leftW - 26;
+    batBar = makeBar(charge, barW, 10, kGreen);
+    lv_obj_set_pos(batBar, 0, 112);
+    batLimitMark = makeRect(charge, 2, 18, kText, 1);
+    lv_obj_set_pos(batLimitMark, 0, 108);
+    batLimitLabel = makeLabel(charge, &lv_font_montserrat_12, kTextFaint, "");
+    lv_obj_set_pos(batLimitLabel, 0, 132);
+    lv_obj_t* source = makeCaption(charge, "POWER SOURCE");
+    lv_obj_set_pos(source, 0, 182);
+    batSource = makeLabel(charge, &lv_font_montserrat_14, kText, "--");
+    lv_obj_set_width(batSource, barW);
+    lv_label_set_long_mode(batSource, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(batSource, 0, 200);
+
+    // Power now, and over the last ten minutes.
+    constexpr lv_coord_t powerH = 158;
+    lv_obj_t* power = makeCard(batScreen, rightX, top, rightW, powerH);
+    makeCaption(power, "POWER");
+    batPeak = makeLabel(power, &lv_font_montserrat_12, kTextFaint, "");
+    lv_obj_align(batPeak, LV_ALIGN_TOP_RIGHT, 0, 0);
+    batWatts = makeLabel(power, &lv_font_montserrat_28, kCyan, "--");
+    lv_obj_set_pos(batWatts, 0, 18);
+    batWattsSub = makeLabel(power, &lv_font_montserrat_12, kTextDim, "");
+    lv_obj_align_to(batWattsSub, batWatts, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -4);
+
+    batChart = lv_chart_create(power);
+    lv_obj_set_size(batChart, rightW - 26, powerH - 2 - 16 - 56);
+    lv_obj_align(batChart, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_opa(batChart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(batChart, 0, 0);
+    lv_obj_set_style_radius(batChart, 0, 0);
+    lv_obj_set_style_pad_all(batChart, 0, 0);
+    lv_obj_set_style_pad_ver(batChart, 4, 0);
+    lv_obj_set_style_line_color(batChart, lv_color_hex(kTrack), LV_PART_MAIN);
+    lv_obj_set_style_line_width(batChart, 2, LV_PART_ITEMS);
+    lv_obj_set_style_size(batChart, 0, LV_PART_INDICATOR);
+    lv_chart_set_type(batChart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(batChart, kPowerHistory);
+    lv_chart_set_range(batChart, LV_CHART_AXIS_PRIMARY_Y, 0, kPowerChartMax);
+    lv_chart_set_div_line_count(batChart, 3, 0);
+    batSeries = lv_chart_add_series(batChart, lv_color_hex(kCyan), LV_CHART_AXIS_PRIMARY_Y);
+    for (lv_coord_t& p : powerPoints) p = LV_CHART_POINT_NONE;
+    lv_chart_set_ext_y_array(batChart, batSeries, powerPoints);
+
+    // Details, two by two.
+    const lv_coord_t detailsY = top + powerH + kGap;
+    lv_obj_t* details = makeCard(batScreen, rightX, detailsY, rightW, kScreenHeight - 8 - detailsY);
+    const lv_coord_t col = (rightW - 26) / 2;
+    batHealth = makeDetail(details, 0, 0, "HEALTH");
+    batCapacity = makeDetail(details, col, 0, "CAPACITY");
+    batVolts = makeDetail(details, 0, 42, "VOLTAGE");
+    batTemp = makeDetail(details, col, 42, "TEMPERATURE");
+}
+
+// One chart point per kPowerSampleMs: the average power over it.
+void recordPower(float watts) {
+    const uint32_t now = lv_tick_get();
+    if (!powerSamples) powerSampleStart = now;
+    powerSum += watts;
+    powerSamples++;
+    if (now - powerSampleStart < kPowerSampleMs) return;
+
+    const float avg = powerSum / powerSamples;
+    powerSum = 0;
+    powerSamples = 0;
+    memmove(powerHist, powerHist + 1, (kPowerHistory - 1) * sizeof powerHist[0]);
+    powerHist[kPowerHistory - 1] = avg;
+    if (powerCount < kPowerHistory) powerCount++;
+
+    float peak = 5.0f;  // W; quieter than this still reads as low
+    for (size_t i = kPowerHistory - powerCount; i < kPowerHistory; i++)
+        if (powerHist[i] > peak) peak = powerHist[i];
+    peak *= 1.15f;
+    for (size_t i = 0; i < kPowerHistory; i++)
+        powerPoints[i] = i < kPowerHistory - powerCount
+                             ? LV_CHART_POINT_NONE
+                             : static_cast<lv_coord_t>(powerHist[i] / peak * kPowerChartMax);
+    lv_chart_refresh(batChart);
+    setTextf(batPeak, "%.0f W  " LV_SYMBOL_BULLET "  10 min", static_cast<double>(peak));
+}
+
+void updateBatteryScreen(const HostStats& s) {
+    using State = HostStats::BatteryState;
+    const auto& b = s.battery;
+    if (!b.present) {
+        hideBatteryScreen();
+        return;
+    }
+    if (!isnan(b.watts)) recordPower(b.watts);
+
+    const uint8_t p = b.percent > 100 ? 100 : b.percent;
+    const uint32_t level = p <= 10 ? kRed : p <= 20 ? kOrange : kGreen;
+    lv_label_set_text_fmt(batPercent, "%u%%", static_cast<unsigned>(p));
+    lv_bar_set_value(batBar, p, LV_ANIM_ON);
+    lv_obj_set_style_bg_color(batBar, lv_color_hex(level), LV_PART_INDICATOR);
+
+    char t[24], buf[64];
+    const bool timed = b.minutes >= 0;
+    if (timed) fmtMinutes(b.minutes, t, sizeof t);
+    switch (b.state) {
+        case State::Charging:
+            lv_label_set_text(batPill, LV_SYMBOL_CHARGE " Charging");
+            lv_obj_set_style_text_color(batPill, lv_color_hex(kGreen), 0);
+            if (timed && b.limit) snprintf(buf, sizeof buf, "%u%% in %s", static_cast<unsigned>(b.limit), t);
+            else if (timed) snprintf(buf, sizeof buf, "Full in %s", t);
+            else snprintf(buf, sizeof buf, "Charging");
+            break;
+        case State::Discharging:
+            lv_label_set_text(batPill, LV_SYMBOL_BATTERY_2 " On battery");
+            lv_obj_set_style_text_color(batPill, lv_color_hex(p <= 20 ? kOrange : kTextDim), 0);
+            if (timed) snprintf(buf, sizeof buf, "%s left", t);
+            else snprintf(buf, sizeof buf, "On battery");
+            break;
+        case State::Full:
+            lv_label_set_text(batPill, LV_SYMBOL_OK " Full");
+            lv_obj_set_style_text_color(batPill, lv_color_hex(kGreen), 0);
+            snprintf(buf, sizeof buf, "Fully charged");
+            break;
+        case State::Idle:
+            lv_label_set_text(batPill, LV_SYMBOL_CHARGE " Plugged in");
+            lv_obj_set_style_text_color(batPill, lv_color_hex(kCyan), 0);
+            if (b.limit && p + 1 >= b.limit) snprintf(buf, sizeof buf, "Held at the %u%% limit", static_cast<unsigned>(b.limit));
+            else snprintf(buf, sizeof buf, "Plugged in, not charging");
+            break;
+    }
+    lv_label_set_text(batStatus, buf);
+
+    if (b.limit) {
+        lv_obj_clear_flag(batLimitMark, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(batLimitMark, lv_obj_get_width(batBar) * b.limit / 100 - 1);
+        lv_label_set_text_fmt(batLimitLabel, "Charging stops at %u%%", static_cast<unsigned>(b.limit));
+    } else {
+        lv_obj_add_flag(batLimitMark, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(batLimitLabel, "");
+    }
+
+    if (!b.ac) lv_label_set_text(batSource, LV_SYMBOL_BATTERY_FULL " Battery");
+    else if (!isnan(b.charger_w)) setTextf(batSource, LV_SYMBOL_USB " Charger, %.0f W", static_cast<double>(b.charger_w));
+    else lv_label_set_text(batSource, LV_SYMBOL_CHARGE " Mains");
+
+    const bool charging = b.state == State::Charging;
+    const uint32_t flow = charging ? kCyan : kOrange;
+    if (isnan(b.watts)) {
+        lv_label_set_text(batWatts, "--");
+        lv_label_set_text(batWattsSub, "");
+    } else {
+        setTextf(batWatts, "%.1f W", static_cast<double>(b.watts));
+        lv_label_set_text(batWattsSub, charging ? "into the battery" : b.watts < 0.05f ? "" : "from the battery");
+    }
+    lv_obj_set_style_text_color(batWatts, lv_color_hex(flow), 0);
+    lv_obj_align_to(batWattsSub, batWatts, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -4);
+    lv_chart_set_series_color(batChart, batSeries, lv_color_hex(flow));
+
+    const auto faint = static_cast<unsigned>(kTextFaint);
+    if (!isnan(b.full_wh) && !isnan(b.design_wh) && b.design_wh > 0) {
+        float health = b.full_wh / b.design_wh * 100;
+        if (health > 100) health = 100;
+        if (b.cycles) setTextf(batHealth, "%.0f%% #%06X %u cycles#", static_cast<double>(health), faint, b.cycles);
+        else setTextf(batHealth, "%.0f%%", static_cast<double>(health));
+    } else {
+        lv_label_set_text(batHealth, "--");
+    }
+    if (!isnan(b.wh) && !isnan(b.full_wh))
+        setTextf(batCapacity, "%.0f #%06X of# %.0f Wh", static_cast<double>(b.wh), faint, static_cast<double>(b.full_wh));
+    else lv_label_set_text(batCapacity, "--");
+    if (!isnan(b.volts)) setTextf(batVolts, "%.1f V", static_cast<double>(b.volts));
+    else lv_label_set_text(batVolts, "--");
+    if (!isnan(b.temp)) setTextf(batTemp, "%.1f C", static_cast<double>(b.temp));
+    else lv_label_set_text(batTemp, "--");
+}
+
 }  // namespace
 
 void init() {
@@ -1054,6 +1373,7 @@ void init() {
     buildSystemTab(tabs[0]);
     buildNetworkTab(tabs[1]);
     buildControlsTab(tabs[2]);
+    buildBatteryScreen();
     buildOverlays();
 #ifdef NERD_START_TAB
     // Debug: open on a given tab (0 System, 1 Network, 2 Controls).
@@ -1065,6 +1385,7 @@ void updateStats(const HostStats& s) {
     char a[16], b[16], buf[160];
 
     updateBattery(s);
+    updateBatteryScreen(s);
 
     // CPU
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
@@ -1179,10 +1500,21 @@ void setButtons(const ButtonDef* defs, size_t count) {
         if (slot.def.icon[0] && !slot.def.has_image)
             makeLabel(btn, &lv_font_montserrat_28, kCyan, slot.def.icon);
 
-        lv_obj_t* label = makeLabel(btn, &lv_font_montserrat_14, kText, slot.def.label);
+        lv_obj_t* label =
+            makeLabel(btn, &lv_font_montserrat_14, slot.def.has_color ? slot.def.color : kText, slot.def.label);
         lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(label, LV_PCT(100));
         lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        slot.label = label;
+
+        if (slot.def.has_image) {
+            // Round the image's corners with the button's.
+            lv_obj_set_style_clip_corner(btn, true, 0);
+            static const lv_event_code_t kPressEvents[] = {LV_EVENT_PRESSED, LV_EVENT_RELEASED,
+                                                           LV_EVENT_PRESS_LOST};
+            for (lv_event_code_t code : kPressEvents)
+                lv_obj_add_event_cb(btn, onImagePress, code, reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
+        }
     }
 
     // Faint placeholders fill the rest of the grid.
@@ -1212,7 +1544,10 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
         freeImage(*slot);
         slot->pixels = static_cast<uint8_t*>(heap_caps_malloc(total, MALLOC_CAP_SPIRAM));
         if (!slot->pixels) slot->pixels = static_cast<uint8_t*>(malloc(total));
-        if (!slot->pixels) return;
+        if (!slot->pixels) {
+            protocol::sendImageResult(id, false);
+            return;
+        }
         slot->dsc = {};
         slot->dsc.header.cf = LV_IMG_CF_TRUE_COLOR_ALPHA;
         slot->dsc.header.w = w;
@@ -1223,6 +1558,8 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
 
     // Out-of-order or oversized chunk: drop the partial image.
     if (!slot->pixels || offset != slot->received || offset + len > total) {
+        // Tell the host once, so it can send the image again.
+        if (slot->pixels) protocol::sendImageResult(id, false);
         freeImage(*slot);
         return;
     }
@@ -1231,10 +1568,45 @@ void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_
     slot->received += len;
 
     if (slot->received == total) {
+        protocol::sendImageResult(id, true);
         slot->img = lv_img_create(slot->btn);
         lv_img_set_src(slot->img, &slot->dsc);
         lv_obj_move_to_index(slot->img, 0);
+        // Sized to the face (hosts from protocol v5): the image is the
+        // button, like a Stream Deck key. Smaller ones sit above the label.
+        uint16_t faceW, faceH;
+        buttonTileSize(&faceW, &faceH);
+        if (w + 2 >= faceW && h + 2 >= faceH) {
+            lv_obj_set_style_pad_all(slot->btn, 0, 0);
+            lv_obj_add_flag(slot->img, LV_OBJ_FLAG_FLOATING);
+            lv_obj_center(slot->img);
+            // The label runs across the bottom on a dark band, readable over
+            // any picture, as Stream Deck shows titles.
+            lv_obj_t* label = slot->label;
+            lv_obj_add_flag(label, LV_OBJ_FLAG_FLOATING);
+            lv_obj_set_width(label, LV_PCT(100));
+            lv_label_set_long_mode(label, LV_LABEL_LONG_DOT);
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_bg_color(label, lv_color_black(), 0);
+            lv_obj_set_style_bg_opa(label, LV_OPA_50, 0);
+            lv_obj_set_style_pad_ver(label, 3, 0);
+            lv_obj_set_style_pad_hor(label, 4, 0);
+            lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, 0);
+            lv_obj_move_foreground(label);
+        }
     }
+}
+
+void buttonTileSize(uint16_t* w, uint16_t* h) {
+    if (!tileW) {
+        lv_obj_update_layout(buttonGrid);
+        const lv_coord_t gap = lv_obj_get_style_pad_column(buttonGrid, 0);
+        // Four columns, three rows, less each button's 1 px border.
+        tileW = (lv_obj_get_content_width(buttonGrid) - 3 * gap) / 4 - 2;
+        tileH = (lv_obj_get_content_height(buttonGrid) - 2 * gap) / 3 - 2;
+    }
+    *w = static_cast<uint16_t>(tileW);
+    *h = static_cast<uint16_t>(tileH);
 }
 
 void setConnected(bool connected) {

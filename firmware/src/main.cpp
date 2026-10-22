@@ -10,7 +10,7 @@ void setup() {
     // The default 256-byte RX buffer overflows on a stats line while LVGL is
     // rendering, and HWCDC on core 2.x never recovers from that. Must be set
     // before begin().
-    Serial.setRxBufferSize(4 * kMaxLineLen);
+    Serial.setRxBufferSize(kSerialRxBuffer);
     // USB CDC; baud is ignored on native USB but kept for clarity.
     Serial.begin(115200);
 

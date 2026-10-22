@@ -16,6 +16,9 @@ void setButtons(const ButtonDef* defs, size_t count);
 void setButtonImage(const char* id, uint16_t w, uint16_t h, size_t offset, size_t total,
                     const uint8_t* data, size_t len);
 void setConnected(bool connected);
+// A Controls button's face in pixels, inside its border. Images this size
+// fill the button.
+void buttonTileSize(uint16_t* w, uint16_t* h);
 void showToast(const char* text, bool ok);
 // Host notice, such as an available update. Shares the toast pill.
 void showNotice(const char* text);

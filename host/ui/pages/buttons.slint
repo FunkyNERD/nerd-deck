@@ -29,22 +29,48 @@ component ButtonTile inherits Rectangle {
             text: root.button.glyph;
             font-size: 22px;
         }
-        if !root.button.empty && root.button.kind == 1: HorizontalLayout {
-            alignment: center;
-            Image {
-                source: root.button.image;
-                width: 28px;
-                height: 28px;
-                image-fit: contain;
-            }
+        if !root.button.empty && root.button.kind == 1 && !root.button.has-image: Glyph {
+            text: Glyphs.image;
+            font-size: 20px;
+            color: Theme.muted;
         }
-        if !root.button.empty: Text {
+        if !root.button.empty && !(root.button.kind == 1 && root.button.has-image): Text {
             text: root.button.label;
             font-size: 12px;
             font-weight: 500;
-            color: Theme.text;
+            color: root.button.color;
             horizontal-alignment: center;
             overflow: elide;
+        }
+    }
+    // An image fills the button, as on the deck.
+    if !root.button.empty && root.button.kind == 1 && root.button.has-image: Rectangle {
+        x: root.border-width;
+        y: root.border-width;
+        width: root.width - 2 * root.border-width;
+        height: root.height - 2 * root.border-width;
+        border-radius: root.border-radius - root.border-width;
+        clip: true;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.button.image;
+            image-fit: cover;
+        }
+        // The label across the bottom, as the deck draws it.
+        Rectangle {
+            y: parent.height - self.height;
+            height: 20px;
+            background: #00000080;
+            Text {
+                text: root.button.label;
+                font-size: 11px;
+                font-weight: 500;
+                color: root.button.color;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
         }
     }
     TouchArea {
@@ -132,6 +158,132 @@ component Inspector inherits Card {
                         font-size: 12px;
                         font-family: Theme.mono;
                         color: Theme.text-faint;
+                    }
+                }
+
+                // Text colour: a chip that opens a picker beside it.
+                Rectangle {
+                    height: 36px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        FieldLabel {
+                            text: "Text colour";
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        color-chip := Rectangle {
+                            width: 132px;
+                            border-radius: 8px;
+                            background: chip-touch.has-hover ? Theme.control-hover : Theme.control;
+                            border-width: 1px;
+                            border-color: Theme.control-border;
+                            accessible-role: AccessibleRole.button;
+                            accessible-label: "Text colour: " + (root.button.has-color ? root.button.color-hex : "default");
+                            accessible-action-default => { color-popup.show(); }
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 5px;
+                                        background: root.button.color;
+                                        border-width: 1px;
+                                        border-color: Theme.control-border;
+                                    }
+                                }
+                                Text {
+                                    text: root.button.has-color ? root.button.color-hex : "Default";
+                                    font-size: 13px;
+                                    font-family: root.button.has-color ? Theme.mono : "";
+                                    color: Theme.text;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                Glyph { text: Glyphs.down; font-size: 10px; color: Theme.text-dim; }
+                            }
+                            chip-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { color-popup.show(); }
+                            }
+                        }
+                    }
+                    color-popup := PopupWindow {
+                        x: parent.width - self.width;
+                        y: parent.height + 6px;
+                        width: 252px;
+                        close-policy: PopupClosePolicy.close-on-click-outside;
+                        Rectangle {
+                            background: Theme.card;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: Theme.control-border;
+                            drop-shadow-blur: 18px;
+                            drop-shadow-color: #00000090;
+                            drop-shadow-offset-y: 6px;
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 12px;
+                                // How the label will look on a button.
+                                Rectangle {
+                                    height: 44px;
+                                    border-radius: 8px;
+                                    background: Theme.sidebar;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    Text {
+                                        text: root.button.label == "" ? "Label" : root.button.label;
+                                        font-size: 14px;
+                                        font-weight: 500;
+                                        color: root.button.color;
+                                        overflow: elide;
+                                    }
+                                }
+                                swatch-grid := Rectangle {
+                                    property <length> size: 26px;
+                                    property <length> gap: (self.width - 7 * self.size) / 6;
+                                    height: ceil(Backend.swatches.length / 7) * (self.size + 8px) - 8px;
+                                    for swatch[i] in Backend.swatches: Rectangle {
+                                        x: mod(i, 7) * (swatch-grid.size + swatch-grid.gap);
+                                        y: floor(i / 7) * (swatch-grid.size + 8px);
+                                        width: swatch-grid.size;
+                                        height: swatch-grid.size;
+                                        border-radius: self.width / 2;
+                                        background: swatch.color;
+                                        border-width: root.button.has-color && root.button.color-hex == swatch.hex ? 3px : 1px;
+                                        border-color: root.button.has-color && root.button.color-hex == swatch.hex ? Theme.text : Theme.control-border;
+                                        accessible-role: AccessibleRole.button;
+                                        accessible-label: swatch.hex;
+                                        accessible-action-default => { Backend.set-color(root.sel, swatch.hex); }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { Backend.set-color(root.sel, swatch.hex); }
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    hex-edit := LineEdit {
+                                        text: root.button.color-hex;
+                                        placeholder-text: "#RRGGBB";
+                                        font-size: 13px;
+                                        accessible-label: "Colour as hex";
+                                        accepted(text) => { Backend.set-color(root.sel, text); }
+                                    }
+                                    PushButton {
+                                        text: "Default";
+                                        flat: true;
+                                        clicked => {
+                                            Backend.set-color(root.sel, "");
+                                            color-popup.close();
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -233,19 +385,22 @@ component Inspector inherits Card {
                                 color: Theme.text-faint;
                                 vertical-alignment: center;
                             }
+                            // The deck's button face, at half size.
                             if root.button.has-image: Rectangle {
-                                width: 40px;
-                                height: 40px;
+                                width: 54px;
+                                height: 41px;
+                                border-radius: 5px;
+                                clip: true;
                                 Image {
                                     source: root.button.image;
-                                    width: 40px;
-                                    height: 40px;
-                                    image-fit: contain;
+                                    width: 54px;
+                                    height: 41px;
+                                    image-fit: cover;
                                 }
                             }
                         }
                         Text {
-                            text: "Scaled to fit 40 × 40 on the deck, keeping transparency.";
+                            text: "Fills the whole button on the deck, cropped to its shape, like a Stream Deck key. Square images of 256 px or more look best.";
                             font-size: 12px;
                             color: Theme.text-faint;
                             wrap: word-wrap;
@@ -299,9 +454,9 @@ component Inspector inherits Card {
             }
             Rectangle { }
             PushButton {
-                text: "Remove";
                 icon: Glyphs.trash;
                 danger: true;
+                accessible-label: "Remove button";
                 clicked => { Backend.remove-button(root.sel); }
             }
         }

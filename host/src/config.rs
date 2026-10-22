@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 
 use crate::icons;
-use crate::images::{self, ButtonImage};
+use crate::images;
 
 // Limits imposed by the firmware (firmware/src/config.hpp, stats.hpp).
 pub const MAX_BUTTONS: usize = 12;
@@ -130,9 +130,18 @@ pub struct ButtonConfig {
     /// PNG/JPEG/BMP file; `~/` and paths relative to the config file work.
     #[serde(default)]
     pub image: Option<PathBuf>,
-    /// `image`, loaded and converted to the device's pixel format.
+    /// `image`, loaded; it's sized for the device when the buttons are sent.
     #[serde(skip)]
-    pub image_data: Option<ButtonImage>,
+    pub image_data: Option<image::DynamicImage>,
+    /// The label's colour, "#RRGGBB". The deck's own when unset.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+/// "#RRGGBB" (or "RRGGBB") as 0xRRGGBB.
+pub fn parse_color(s: &str) -> Option<u32> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    (hex.len() == 6).then(|| u32::from_str_radix(hex, 16).ok()).flatten()
 }
 
 impl Config {
@@ -195,6 +204,13 @@ impl Config {
                 "button {:?}: set either icon or image, not both",
                 b.id
             );
+            if let Some(color) = &b.color {
+                ensure!(
+                    parse_color(color).is_some(),
+                    "button {:?}: color {color:?} isn't a colour like \"#FFAA00\"",
+                    b.id
+                );
+            }
             if let Some(icon) = &b.icon {
                 ensure!(
                     icons::lookup(icon).is_some(),
@@ -212,7 +228,7 @@ impl Config {
             if let Some(path) = &b.image {
                 let path = resolve_path(config_dir, path);
                 let img = images::load(&path).with_context(|| format!("button {:?}", b.id))?;
-                log::debug!("button {:?}: {} -> {}x{}", b.id, path.display(), img.width, img.height);
+                log::debug!("button {:?}: {} ({}x{})", b.id, path.display(), img.width(), img.height());
                 b.image_data = Some(img);
             }
         }
@@ -266,6 +282,14 @@ mod tests {
     fn rejects_unknown_icon() {
         let err = parse("[[button]]\nid='a'\nlabel='A'\ncommand='true'\nicon='nope'").unwrap_err();
         assert!(err.to_string().contains("unknown icon"));
+    }
+
+    #[test]
+    fn parses_colors() {
+        assert_eq!(parse_color("#26C6DA"), Some(0x26C6DA));
+        assert_eq!(parse_color("ffffff"), Some(0xFFFFFF));
+        assert_eq!(parse_color("#fff"), None);
+        assert!(parse("[[button]]\nid='a'\nlabel='A'\ncommand='true'\ncolor='red'").is_err());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump together with `kProtoVersion` in firmware/src/config.hpp.
-pub const PROTO_VERSION: u32 = 4;
+pub const PROTO_VERSION: u32 = 5;
 
 /// Messages the host sends to the device.
 #[derive(Debug, Serialize)]
@@ -64,8 +64,15 @@ pub enum DeviceMsg {
         /// Added in v3; older firmware leaves it out.
         #[serde(default)]
         board: Option<String>,
+        /// Size of a Controls button's face in pixels, which images are
+        /// cropped to fill. Added in v5; older firmware shows images as icons.
+        #[serde(default)]
+        tile: Option<[u32; 2]>,
     },
     Press { id: String },
+    /// An image finished arriving (`ok`) or was dropped after a lost chunk.
+    /// Added in v5; the host waits for it before sending the next image.
+    Image { id: String, ok: bool },
     #[serde(other)]
     Unknown,
 }
@@ -80,6 +87,9 @@ pub struct ButtonDef {
     /// An `Image` message for this button follows.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub image: bool,
+    /// The label's colour, 0xRRGGBB. Added in v5.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -136,6 +146,37 @@ pub struct BatteryStats {
     /// 0-100.
     pub percent: u8,
     pub charging: bool,
+    /// "charging", "discharging", "full", or "idle" (plugged in, not charging,
+    /// say held at a charge limit). Added in v5, like the fields below; each
+    /// is left out when the battery doesn't report it.
+    pub state: &'static str,
+    /// Into the battery while charging, out of it otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watts: Option<f32>,
+    /// To empty while discharging, to full (or the charge limit) while charging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wh: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_wh: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design_wh: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volts: Option<f32>,
+    /// Degrees Celsius.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temp: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycles: Option<u32>,
+    /// Charging stops at this percentage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u8>,
+    /// On mains or USB-C power.
+    pub ac: bool,
+    /// The charger's negotiated power, when it reports one (USB-C PD).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charger_w: Option<f32>,
 }
 
 #[cfg(test)]

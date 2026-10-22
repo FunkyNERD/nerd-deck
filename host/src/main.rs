@@ -36,6 +36,13 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Decoded bytes per `image` message; base64 keeps each line well under the
 /// device's 2 KB limit.
 const IMAGE_CHUNK: usize = 1024;
+/// Pause after each image chunk. The device reads serial between frames, so
+/// a full-button image (~26 KB) sent flat out can overrun it while it draws.
+const IMAGE_CHUNK_PAUSE: Duration = Duration::from_millis(5);
+/// How long to wait for the device's result for an image (protocol v5).
+const IMAGE_RESULT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Tries per image; the device drops one that loses a chunk.
+const IMAGE_TRIES: usize = 3;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -261,11 +268,13 @@ impl Host {
             s.serial = port.serial().unwrap_or_default().to_owned();
         });
 
+        // The device answers with its own hello, and the buttons follow that:
+        // it says how big their images should be.
         conn.send(&HostMsg::Hello {
             proto: PROTO_VERSION,
             host: sysinfo::System::host_name().unwrap_or_default(),
         })?;
-        send_buttons(&self.cfg, &mut conn)?;
+        let mut tile = None;
 
         let mut next_stats = Instant::now();
         // The update check's `seq` last shown on the device; 0 = none this session.
@@ -302,7 +311,7 @@ impl Host {
                             if device_changed {
                                 return Ok(SessionEnd::Reconnect);
                             }
-                            send_buttons(&self.cfg, &mut conn)?;
+                            send_buttons(&self.cfg, &mut conn, tile)?;
                         }
                         Err(e) => {
                             let _ = reply.send(Err(format!("{e:#}")));
@@ -343,8 +352,9 @@ impl Host {
 
             match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
                 Ok(msg) => {
-                    if let DeviceMsg::Hello { fw, board, proto } = &msg {
+                    if let DeviceMsg::Hello { fw, board, proto, tile: t } = &msg {
                         said_hello = true;
+                        tile = *t;
                         // The device rebooted, so it lost any notice.
                         notified = 0;
                         self.api.update(|s| {
@@ -417,13 +427,16 @@ fn usb_info(cfg: &Config, port: &device::Port) -> serialport::UsbPortInfo {
 
 fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
     match msg {
-        DeviceMsg::Hello { fw, proto, .. } => {
+        DeviceMsg::Hello { fw, proto, tile, .. } => {
             log::info!("device firmware {fw}, protocol v{proto}");
+            if let Some([w, h]) = tile {
+                log::debug!("button images fill {w}x{h}");
+            }
             if proto != PROTO_VERSION {
                 log::warn!("protocol mismatch: host v{PROTO_VERSION}, device v{proto}");
             }
             // Device may have rebooted; resend its layout.
-            send_buttons(cfg, conn)?;
+            send_buttons(cfg, conn, tile)?;
         }
         DeviceMsg::Press { id } => {
             let (ok, msg) = match cfg.button(&id) {
@@ -441,12 +454,18 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
             };
             conn.send(&HostMsg::Ack { id, ok, msg })?;
         }
+        // The reader routes these to the image sender.
+        DeviceMsg::Image { .. } => {}
         DeviceMsg::Unknown => log::debug!("ignoring unknown device message"),
     }
     Ok(())
 }
 
-fn send_buttons(cfg: &Config, conn: &mut Connection) -> Result<()> {
+/// Sends the layout, then each button's image: filling a `tile` (width,
+/// height) when the device reports one, else icon-sized for older firmware.
+/// Devices that report a tile (v5) also say when each image has landed, so
+/// the next one waits for it and a dropped one is sent again.
+fn send_buttons(cfg: &Config, conn: &mut Connection, tile: Option<[u32; 2]>) -> Result<()> {
     let buttons = cfg
         .buttons
         .iter()
@@ -455,23 +474,51 @@ fn send_buttons(cfg: &Config, conn: &mut Connection) -> Result<()> {
             label: b.label.clone(),
             icon: b.icon.as_deref().and_then(icons::lookup).map(String::from),
             image: b.image_data.is_some(),
+            color: b.color.as_deref().and_then(config::parse_color),
         })
         .collect();
     conn.send(&HostMsg::Buttons { buttons })?;
 
     for b in &cfg.buttons {
-        let Some(img) = &b.image_data else { continue };
-        for (i, chunk) in img.data.chunks(IMAGE_CHUNK).enumerate() {
-            conn.send(&HostMsg::Image {
-                id: b.id.clone(),
-                w: img.width,
-                h: img.height,
-                fmt: images::FORMAT,
-                offset: i * IMAGE_CHUNK,
-                total: img.data.len(),
-                data: base64::engine::general_purpose::STANDARD.encode(chunk),
-            })?;
+        let Some(source) = &b.image_data else { continue };
+        let img = match tile {
+            Some([w, h]) => images::fill(source, w, h),
+            None => images::icon(source),
+        };
+        for attempt in 1..=IMAGE_TRIES {
+            conn.clear_image_results();
+            send_image(conn, &b.id, &img)?;
+            if tile.is_none() {
+                break; // older firmware doesn't say
+            }
+            match conn.image_result(&b.id, IMAGE_RESULT_TIMEOUT) {
+                Some(true) => break,
+                Some(false) if attempt < IMAGE_TRIES => {
+                    log::debug!("button {:?}: image dropped; sending it again", b.id);
+                }
+                Some(false) => log::warn!("button {:?}: the device kept dropping its image", b.id),
+                None => {
+                    log::warn!("button {:?}: no word from the device on its image", b.id);
+                    break;
+                }
+            }
         }
+    }
+    Ok(())
+}
+
+fn send_image(conn: &mut Connection, id: &str, img: &images::ButtonImage) -> Result<()> {
+    for (i, chunk) in img.data.chunks(IMAGE_CHUNK).enumerate() {
+        conn.send(&HostMsg::Image {
+            id: id.to_owned(),
+            w: img.width,
+            h: img.height,
+            fmt: images::FORMAT,
+            offset: i * IMAGE_CHUNK,
+            total: img.data.len(),
+            data: base64::engine::general_purpose::STANDARD.encode(chunk),
+        })?;
+        thread::sleep(IMAGE_CHUNK_PAUSE);
     }
     Ok(())
 }

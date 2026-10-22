@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <mbedtls/base64.h>
+#include <math.h>
 
 #include "config.hpp"
 #include "stats.hpp"
@@ -69,9 +70,27 @@ void handleStats(JsonObjectConst o) {
 
     JsonObjectConst battery = o["battery"];
     if (!battery.isNull()) {
-        s.battery.present = true;
-        s.battery.percent = battery["percent"] | 0u;
-        s.battery.charging = battery["charging"] | false;
+        auto& b = s.battery;
+        using State = HostStats::BatteryState;
+        b.present = true;
+        b.percent = battery["percent"] | 0u;
+        b.charging = battery["charging"] | false;
+        const char* state = battery["state"] | (b.charging ? "charging" : "discharging");
+        b.state = strcmp(state, "charging") == 0 ? State::Charging
+                  : strcmp(state, "full") == 0   ? State::Full
+                  : strcmp(state, "idle") == 0   ? State::Idle
+                                                 : State::Discharging;
+        b.watts = battery["watts"] | NAN;
+        b.minutes = battery["minutes"] | -1;
+        b.wh = battery["wh"] | NAN;
+        b.full_wh = battery["full_wh"] | NAN;
+        b.design_wh = battery["design_wh"] | NAN;
+        b.volts = battery["volts"] | NAN;
+        b.temp = battery["temp"] | NAN;
+        b.cycles = battery["cycles"] | 0u;
+        b.limit = battery["limit"] | 0u;
+        b.ac = battery["ac"] | b.charging;
+        b.charger_w = battery["charger_w"] | NAN;
     }
 
     ui::updateStats(s);
@@ -86,6 +105,8 @@ void handleButtons(JsonObjectConst o) {
         strlcpy(defs[count].label, b["label"] | defs[count].id, sizeof defs[count].label);
         strlcpy(defs[count].icon, b["icon"] | "", sizeof defs[count].icon);
         defs[count].has_image = b["image"] | false;
+        defs[count].has_color = !b["color"].isNull();
+        defs[count].color = b["color"] | 0u;
         count++;
     }
     ui::setButtons(defs, count);
@@ -183,6 +204,19 @@ void sendHello() {
     doc["fw"] = FW_VERSION;
     doc["proto"] = kProtoVersion;
     doc["board"] = FW_BOARD;
+    uint16_t w, h;
+    ui::buttonTileSize(&w, &h);
+    JsonArray tile = doc["tile"].to<JsonArray>();
+    tile.add(w);
+    tile.add(h);
+    send(doc);
+}
+
+void sendImageResult(const char* id, bool ok) {
+    JsonDocument doc;
+    doc["type"] = "image";
+    doc["id"] = id;
+    doc["ok"] = ok;
     send(doc);
 }
 

@@ -13,6 +13,15 @@ export struct DeckButton {
     image-path: string,
     command: string,
     empty: bool,
+    // The label's colour; `color` is the deck's default when not set.
+    has-color: bool,
+    color: color,
+    color-hex: string,
+}
+
+export struct Swatch {
+    color: color,
+    hex: string,
 }
 
 export struct IconChoice {
@@ -72,6 +81,9 @@ export global Backend {
     callback set-command(int, string);
     callback set-kind(int, int);
     callback set-icon(int, string);
+    // "#RRGGBB", or "" for the deck's default.
+    callback set-color(int, string);
+    in property <[Swatch]> swatches;
     callback filter-icons(string);
     callback choose-image(int);
     callback run-command(int);

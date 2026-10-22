@@ -24,6 +24,9 @@ pub struct Collector {
     mounts: Vec<String>,
     removable: bool,
     battery: bool,
+    /// Smoothed battery power and the state it's for, so the time-left
+    /// estimate doesn't jump around.
+    battery_watts: Option<(&'static str, f32)>,
     /// Set by the mount watcher; the disk list is rescanned only then.
     mounts_changed: Arc<AtomicBool>,
     last_sample: Instant,
@@ -43,6 +46,7 @@ impl Collector {
             mounts,
             removable,
             battery,
+            battery_watts: None,
             mounts_changed: mounts::watch(),
             last_sample: Instant::now(),
         }
@@ -77,8 +81,21 @@ impl Collector {
             },
             net: self.net(elapsed),
             disks: self.disks(),
-            battery: if self.battery { battery::read() } else { None },
+            battery: if self.battery { self.battery() } else { None },
         }
+    }
+
+    fn battery(&mut self) -> Option<crate::protocol::BatteryStats> {
+        let mut b = battery::read()?;
+        let watts = b.watts.unwrap_or(0.0);
+        // Start over when charging starts or stops.
+        let smoothed = match self.battery_watts {
+            Some((state, avg)) if state == b.state => avg + (watts - avg) * 0.1,
+            _ => watts,
+        };
+        self.battery_watts = Some((b.state, smoothed));
+        b.minutes = battery::minutes_left(&b, smoothed);
+        Some(b)
     }
 
     fn cpu(&self) -> CpuStats {

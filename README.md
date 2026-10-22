@@ -95,10 +95,22 @@ streams stats. It reconnects automatically if the device is unplugged or reset.
 Buttons are defined only in the host config. The device sends just a button `id`,
 so it can't trigger anything that isn't in that file.
 
-Each button can show a built-in symbol (`icon = "mute"`) or a picture
-(`image = "~/icons/obs.png"`, PNG, JPEG or BMP) above its label. The host scales
-images to fit 40×40 and sends them to the device each time it sends the button
-layout. See `host/config.example.toml` for the icon names.
+Each button can show a built-in symbol above its label (`icon = "mute"`), or be
+a picture (`image = "~/icons/obs.png"`, PNG, JPEG or BMP). A picture fills the
+whole button, like a Stream Deck key: the host scales it to cover the button's
+face (the device reports the size) and crops the rest, so square images of 256
+px or more look best, and the label runs across the bottom on a dark band. Any
+button's label can have its own colour (`color = "#FFA726"`). See
+`host/config.example.toml` for the icon names.
+
+### Battery screen
+
+On a laptop, tap the battery in the device's header for the battery screen:
+charge and what it's doing (time to full or empty, or held at a charge limit),
+power in or out with a chart of the last 10 minutes, the power source (with a
+USB-C charger's wattage), and health, capacity, voltage and temperature. It
+reads `/sys/class/power_supply`; what shows depends on what the battery
+reports. Tap **Battery** at the top left to go back.
 
 ### Desktop notifications
 
@@ -130,8 +142,9 @@ icon) opens a window for everything in the config:
 
 - **Device:** the connected deck, its port, serial number, firmware and protocol.
 - **Buttons:** the Controls tab as a grid. Pick a button to change its label,
-  its icon (the deck's own symbols, searchable), an image from a file, or its
-  command, which **Run now** tries on the spot. Add, remove and reorder them.
+  its text colour (presets or any hex colour), its icon (the deck's own
+  symbols, searchable), an image from a file, or its command, which **Run
+  now** tries on the spot. Add, remove and reorder them.
 - **Stats:** update interval, network interface, battery, and which disks the
   Network tab shows, in what order.
 - **Notifications:** on or off, which apps (each app that has sent one is
