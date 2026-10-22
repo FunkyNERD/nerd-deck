@@ -89,7 +89,7 @@ export component FirmwarePage inherits VerticalLayout {
                 spacing: 12px;
                 Version { label: "On the deck"; value: Backend.firmware; }
                 Version { label: "Latest on GitHub"; value: Backend.fw-busy == "checking" ? "…" : Backend.fw-latest; }
-                Version { label: "Built for"; value: "wt32-sc01-plus"; mono: true; }
+                Version { label: "Board"; value: Backend.board; mono: true; }
             }
             if fw.busy: VerticalLayout {
                 spacing: 10px;

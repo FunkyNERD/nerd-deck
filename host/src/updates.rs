@@ -4,12 +4,13 @@
 //! (firmware-v* tags), which the settings window, and the service when it keeps
 //! the deck up to date, download into the cache (firmware.rs).
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
@@ -25,6 +26,8 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// Downloads get longer; an image is under a megabyte.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_IMAGE: u64 = 16 * 1024 * 1024;
+/// How often the firmware download looks for a newly seen board.
+const BOARD_POLL: Duration = Duration::from_secs(30);
 
 /// The newest release, when it's newer than this build. `seq` goes up with
 /// every check that finds one, so the notice is shown again each day.
@@ -61,6 +64,7 @@ struct Asset {
 #[derive(Debug, Clone)]
 pub struct FirmwareRelease {
     pub version: String,
+    pub board: String,
     name: String,
     url: String,
     digest: Option<String>,
@@ -144,20 +148,23 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-/// Looks through the recent releases for the newest firmware this host can
-/// talk to. Prereleases are left out.
-pub fn check_firmware() -> Result<FirmwareCheck> {
+/// Looks through the recent releases for the newest firmware for a board that
+/// this host can talk to. Prereleases are left out.
+pub fn check_firmware(board: &str) -> Result<FirmwareCheck> {
     let releases: Vec<Release> = api("releases?per_page=20").context("parsing the releases")?;
-    Ok(newest_firmware(releases))
+    Ok(newest_firmware(releases, board))
 }
 
-fn newest_firmware(releases: Vec<Release>) -> FirmwareCheck {
+fn newest_firmware(releases: Vec<Release>, board: &str) -> FirmwareCheck {
     let mut check = FirmwareCheck::default();
     let releases = releases.into_iter().filter(|r| !r.draft && !r.prerelease);
     for asset in releases.flat_map(|r| r.assets) {
-        let Some((version, proto)) = firmware::parse_name(&asset.name) else {
+        let Some(firmware::Name { version, board: b, proto }) = firmware::parse_name(&asset.name) else {
             continue;
         };
+        if b != board {
+            continue;
+        }
         if proto != PROTO_VERSION {
             let newer = |v: &Option<String>| v.as_ref().is_none_or(|n| is_newer(&version, n));
             if proto > PROTO_VERSION && newer(&check.needs_app) {
@@ -169,6 +176,7 @@ fn newest_firmware(releases: Vec<Release>) -> FirmwareCheck {
         if newer {
             check.firmware = Some(FirmwareRelease {
                 version,
+                board: board.to_owned(),
                 name: asset.name,
                 url: asset.browser_download_url,
                 digest: asset.digest,
@@ -186,7 +194,7 @@ fn newest_firmware(releases: Vec<Release>) -> FirmwareCheck {
 
 /// Downloads the firmware into the cache, unless it's there already, and
 /// returns its path. The image is checked against the release's digest and
-/// must be for our board and the version it claims.
+/// must be for the board and the version it claims.
 pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
     let dir = firmware::cache_dir().context("no cache directory")?;
     let path = dir.join(&release.name);
@@ -213,10 +221,12 @@ pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
     }
     let image = Image::parse(data).context("checking the download")?;
     ensure!(
-        image.version == release.version,
-        "the download is firmware {}, not {}",
+        image.version == release.version && image.board == release.board,
+        "the download is firmware {} for {}, not {} for {}",
         image.version,
-        release.version
+        image.board,
+        release.version,
+        release.board
     );
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let partial = path.with_extension("part");
@@ -226,24 +236,37 @@ pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The boards to keep firmware downloaded for: those of the decks seen so far.
+pub type Boards = Arc<Mutex<BTreeSet<String>>>;
+
 /// For the service while it keeps the deck up to date: downloads new firmware
-/// at startup and then daily, and leaves installing it to firmware::Flashing.
-pub fn fetch_firmware() {
+/// for each board in `boards` at startup and then daily, and straight away
+/// for a board that's added, and leaves installing it to firmware::Flashing.
+pub fn fetch_firmware(boards: Boards) {
     let spawned = thread::Builder::new()
         .name("firmware-fetch".into())
-        .spawn(|| loop {
-            let fetched = check_firmware().and_then(|check| match check.firmware {
-                Some(release) => download_firmware(&release).map(Some),
-                None => Ok(None),
-            });
-            let wait = match fetched {
-                Ok(_) => CHECK_EVERY,
-                Err(e) => {
-                    log::debug!("firmware check failed: {e:#}");
-                    RETRY_AFTER
+        .spawn(move || {
+            let mut fetched = BTreeSet::new();
+            let mut next = Instant::now();
+            loop {
+                let wanted = boards.lock().unwrap().clone();
+                if Instant::now() >= next || wanted != fetched {
+                    let mut ok = true;
+                    for board in &wanted {
+                        let result = check_firmware(board).and_then(|check| match check.firmware {
+                            Some(release) => download_firmware(&release).map(Some),
+                            None => Ok(None),
+                        });
+                        if let Err(e) = result {
+                            log::debug!("firmware check for {board} failed: {e:#}");
+                            ok = false;
+                        }
+                    }
+                    fetched = wanted;
+                    next = Instant::now() + if ok { CHECK_EVERY } else { RETRY_AFTER };
                 }
-            };
-            thread::sleep(wait);
+                thread::sleep(BOARD_POLL);
+            }
         });
     if let Err(e) = spawned {
         log::warn!("can't start the firmware download: {e}");
@@ -299,18 +322,20 @@ mod tests {
 
     #[test]
     fn picks_the_newest_compatible_firmware() {
-        let fw = |v: &str, p: u32| firmware::file_name(v, p);
+        let board = firmware::LEGACY_BOARD;
+        let fw = |v: &str, p: u32| firmware::file_name(v, board, p);
         let check = newest_firmware(vec![
             release("0.9.0", true, &[&fw("0.9.0", PROTO_VERSION)]),
             release("0.8.0", false, &[&fw("0.8.0", PROTO_VERSION + 1), "nerd-deck_0.8.0-1_amd64.deb"]),
             release("0.7.1", false, &[&fw("0.7.1", PROTO_VERSION)]),
             release("0.7.0", false, &[&fw("0.7.0", PROTO_VERSION)]),
-        ]);
+            release("0.7.2", false, &[&firmware::file_name("0.7.2", "waveshare-c5-touch-35", PROTO_VERSION)]),
+        ], board);
         assert_eq!(check.firmware.unwrap().version, "0.7.1");
         assert_eq!(check.needs_app.as_deref(), Some("0.8.0"));
 
-        let check = newest_firmware(vec![release("0.7.0", false, &[&fw("0.7.0", PROTO_VERSION)])]);
+        let check = newest_firmware(vec![release("0.7.0", false, &[&fw("0.7.0", PROTO_VERSION)])], board);
         assert!(check.needs_app.is_none());
-        assert!(newest_firmware(vec![]).firmware.is_none());
+        assert!(newest_firmware(vec![], board).firmware.is_none());
     }
 }

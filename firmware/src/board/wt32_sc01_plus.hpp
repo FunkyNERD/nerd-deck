@@ -4,14 +4,19 @@
 #include <LovyanGFX.hpp>
 
 // Panel/touch wiring for the WT32-SC01 Plus.
-class LGFX_WT32SC01Plus : public lgfx::LGFX_Device {
+namespace board {
+
+// Nothing to do before tft.init() on this board.
+inline void powerUp() {}
+
+class Lcd : public lgfx::LGFX_Device {
     lgfx::Panel_ST7796 panel_;
     lgfx::Bus_Parallel8 bus_;
     lgfx::Light_PWM light_;
     lgfx::Touch_FT5x06 touch_;
 
 public:
-    LGFX_WT32SC01Plus() {
+    Lcd() {
         {
             auto cfg = bus_.config();
             cfg.freq_write = 40000000;
@@ -75,3 +80,5 @@ public:
         setPanel(&panel_);
     }
 };
+
+}  // namespace board

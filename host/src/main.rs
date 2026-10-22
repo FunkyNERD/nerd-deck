@@ -139,7 +139,8 @@ struct Host {
     /// Started once the config turns them on; a reload never stops them, but
     /// their results are only used while the config says so.
     updates: Option<updates::Shared>,
-    fetching_firmware: bool,
+    /// The boards to keep firmware downloaded for, once that's started.
+    firmware_boards: Option<updates::Boards>,
     notifications: Option<Receiver<notifications::Raw>>,
     seen_apps: notifications::SeenApps,
     flashing: firmware::Flashing,
@@ -165,7 +166,7 @@ impl Host {
             flashing: firmware::Flashing::new(&cfg),
             cfg,
             updates: None,
-            fetching_firmware: false,
+            firmware_boards: None,
             notifications: None,
             seen_apps: notifications::SeenApps::load(),
             api: api::Service::start(status, tx),
@@ -179,9 +180,11 @@ impl Host {
         if self.cfg.updates.check && self.updates.is_none() {
             self.updates = Some(updates::watch());
         }
-        if self.cfg.updates.firmware && !self.fetching_firmware {
-            updates::fetch_firmware();
-            self.fetching_firmware = true;
+        if self.cfg.updates.firmware && self.firmware_boards.is_none() {
+            // Decks seen before, and any that say hello from now on.
+            let boards = updates::Boards::new(firmware::KnownDevices::load().all_boards().into());
+            updates::fetch_firmware(boards.clone());
+            self.firmware_boards = Some(boards);
         }
         if self.cfg.notifications.enabled && self.notifications.is_none() {
             self.notifications = Some(notifications::watch());
@@ -290,8 +293,9 @@ impl Host {
         // The update check's `seq` last shown on the device; 0 = none this session.
         let mut notified = 0;
         let mut said_hello = false;
-        // The deck's firmware version, once it says hello.
+        // The deck's firmware version and board, once it says hello.
         let mut deck_fw = String::new();
+        let mut deck_board = String::new();
 
         loop {
             let available = self.updates.as_ref().and_then(|u| u.lock().unwrap().clone());
@@ -338,7 +342,9 @@ impl Host {
                     Command::InstallFirmware { path, reply } => {
                         let fw = firmware::Image::load(path.as_ref()).map_err(|e| format!("{e:#}")).and_then(|fw| {
                             // Updates only: never the same or an older version.
-                            if updates::is_newer(&fw.version, &deck_fw) {
+                            if !deck_board.is_empty() && fw.board != deck_board {
+                                Err(format!("that firmware is for {}, and the deck is {deck_board}", fw.board))
+                            } else if updates::is_newer(&fw.version, &deck_fw) {
                                 Ok(fw)
                             } else if deck_fw.is_empty() {
                                 Err("the deck hasn't said which firmware it runs yet".into())
@@ -382,6 +388,12 @@ impl Host {
                         said_hello = true;
                         tile = *t;
                         deck_fw = fw.clone();
+                        deck_board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
+                        if let Some(boards) = &self.firmware_boards {
+                            if firmware::chip(&deck_board).is_some() {
+                                boards.lock().unwrap().insert(deck_board.clone());
+                            }
+                        }
                         // The device rebooted, so it lost any notice.
                         notified = 0;
                         self.api.update(|s| {

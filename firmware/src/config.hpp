@@ -4,8 +4,11 @@
 #include <stdint.h>
 
 #define FW_VERSION "0.6.0"
-// Sent in `hello`. The host only installs its bundled firmware on this board.
-#define FW_BOARD "wt32-sc01-plus"
+// Sent in `hello`, and the name of the build environment in platformio.ini
+// that sets it. The host only installs firmware built for the deck's board.
+#ifndef FW_BOARD
+#error "FW_BOARD comes from the build environment's flags (platformio.ini)"
+#endif
 
 // Bump together with PROTO_VERSION in host/src/protocol.rs.
 constexpr uint32_t kProtoVersion = 6;

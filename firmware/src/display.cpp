@@ -4,7 +4,12 @@
 #include <esp_heap_caps.h>
 #include <lvgl.h>
 
+// Each build environment in platformio.ini names its board.
+#if defined(BOARD_WAVESHARE_C5_TOUCH_35)
+#include "board/waveshare_c5_touch_35.hpp"
+#else
 #include "board/wt32_sc01_plus.hpp"
+#endif
 #include "config.hpp"
 
 namespace display {
@@ -12,7 +17,7 @@ namespace {
 
 constexpr int kBufLines = 40;
 
-LGFX_WT32SC01Plus tft;
+board::Lcd tft;
 lv_disp_draw_buf_t drawBuf;
 lv_disp_drv_t dispDrv;
 lv_indev_drv_t indevDrv;
@@ -57,6 +62,7 @@ void monitor(lv_disp_drv_t*, uint32_t ms, uint32_t px) {
 }  // namespace
 
 void init() {
+    board::powerUp();
     tft.init();
     tft.setRotation(1);  // landscape, USB on the left; use 3 to flip
     tft.setBrightness(200);

@@ -1,7 +1,7 @@
 # nerd-deck
 
 A USB desk display for a Linux PC: live CPU, memory, network and disk stats on a
-WT32-SC01 Plus, plus a page of touch buttons that run commands on the PC.
+3.5" ESP32 touch display, plus a page of touch buttons that run commands on the PC.
 
 | | |
 |---|---|
@@ -11,7 +11,7 @@ WT32-SC01 Plus, plus a page of touch buttons that run commands on the PC.
 | **Controls:** buttons that run commands on the PC. | **Waiting:** shown until the host app connects. |
 
 ```
-┌──────────────── PC (Linux) ────────────────┐        USB-C        ┌──── WT32-SC01 Plus (ESP32-S3) ────┐
+┌──────────────── PC (Linux) ────────────────┐        USB-C        ┌──────── 3.5" ESP32 display ───────┐
 │ host/  (Rust)                              │  newline-delimited  │ firmware/  (PlatformIO / Arduino) │
 │  collector ─ sysinfo → stats ──────────────┼──── JSON ─────────▶ │  protocol → ui (LVGL tabs)        │
 │  actions   ◀─ press{id} → sh -c <command>  │ ◀────────────────── │  Controls tab buttons             │
@@ -26,10 +26,24 @@ git clone git@github.com:FunkyNERD/nerd-deck.git
 
 ## Hardware
 
-WT32-SC01 Plus: ESP32-S3-WROVER-N16R2 (16 MB flash, 2 MB PSRAM), 3.5" 480×320
-ST7796 over an 8-bit parallel bus, and an FT6336U capacitive touch controller. The
-USB-C port goes to the S3's native USB, so the board enumerates as `303a:1001`
-with no USB-UART bridge. Pin mapping: `firmware/src/board/wt32_sc01_plus.hpp`.
+Two boards, both 3.5" 480×320 ST7796 panels with FT6336 capacitive touch. On
+both, the USB-C port goes to the chip's native USB, so the board enumerates as
+`303a:1001` with no USB-UART bridge.
+
+| Board | Build environment | Chip | Display bus | Pin mapping |
+|---|---|---|---|---|
+| WT32-SC01 Plus | `wt32-sc01-plus` | ESP32-S3-WROVER-N16R2 (16 MB flash, 2 MB PSRAM) | 8-bit parallel | `firmware/src/board/wt32_sc01_plus.hpp` |
+| Waveshare ESP32-C5-Touch-LCD-3.5 | `waveshare-c5-touch-35` | ESP32-C5-WROOM-1 (32 MB flash, 8 MB PSRAM) | SPI | `firmware/src/board/waveshare_c5_touch_35.hpp` |
+
+On the Waveshare board the backlight and the LCD and touch resets go through a
+CH32V003 I/O expander on the touch controller's I2C bus. Its C5 needs Arduino
+core 3.x, which its build environment gets from the pioarduino platform.
+
+Each board is a build environment in `firmware/platformio.ini`, named after the
+board, that sets `FW_BOARD`. The deck reports it in `hello`, each release has a
+firmware file per board, and the app only installs a deck's own board's
+firmware. To add a board, add a pin mapping and a build environment, and the
+board and its chip to `BOARDS` in `host/src/firmware.rs`.
 
 ## Firmware
 
@@ -37,7 +51,8 @@ Stack: LovyanGFX for the display and touch, LVGL 8.3 for the UI, and ArduinoJson
 for the protocol.
 
 ```bash
-cd firmware && pio run -t upload
+cd firmware && pio run -e wt32-sc01-plus -t upload
+cd firmware && pio run -e waveshare-c5-touch-35 -t upload
 ```
 
 Stop the host service first (`systemctl --user stop nerd-deck`), because it
@@ -47,13 +62,13 @@ holds the serial port. If upload doesn't start, hold **BOOT** while pressing
 You don't normally need to flash by hand: the host app downloads the firmware
 from the GitHub release and installs it on the device (see
 [Firmware updates](#firmware-updates)). Each build also writes
-`.pio/build/wt32-sc01-plus/firmware-merged.bin` (bootloader, partitions and app
-in one image, via `merge_firmware.py`), which is what each release publishes.
+`.pio/build/<board>/firmware-merged.bin` (bootloader, partitions and app in one
+image, via `merge_firmware.py`), which is what each release publishes.
 
 Debug build flags:
 
 ```bash
-PLATFORMIO_BUILD_FLAGS="-DNERD_PERF -DNERD_START_TAB=1" pio run -t upload
+PLATFORMIO_BUILD_FLAGS="-DNERD_PERF -DNERD_START_TAB=1" pio run -e wt32-sc01-plus -t upload
 ```
 
 - `NERD_PERF` prints a `perf fps=... busy=...` line every second. The host logs
@@ -238,18 +253,18 @@ Logs: `journalctl --user -u nerd-deck -f`
 ### Firmware updates
 
 The device firmware has releases of its own, apart from the app's (see
-[Releases](#releases)), each with one file,
-`nerd-deck-firmware-<version>-wt32-sc01-plus-proto<N>.bin`; the app's packages
-don't carry it. The settings window's Firmware page checks GitHub for the newest
-firmware that speaks this host's protocol, and **Install** downloads it, checks
-it against the release's SHA-256 digest and the board and version inside the
-image, and has the service install it. Firmware that needs a newer protocol is
-only mentioned, with a note to update the app first. Downloads are kept in
-`~/.cache/nerd-deck/firmware/`.
+[Releases](#releases)), with one file per board,
+`nerd-deck-firmware-<version>-<board>-proto<N>.bin`; the app's packages don't
+carry it. The settings window's Firmware page checks GitHub for the newest
+firmware for the connected deck's board that speaks this host's protocol, and
+**Install** downloads it, checks it against the release's SHA-256 digest and the
+board and version inside the image, and has the service install it. Firmware
+that needs a newer protocol is only mentioned, with a note to update the app
+first. Downloads are kept in `~/.cache/nerd-deck/firmware/`.
 
 With automatic updates on, the service downloads new firmware the same way at
 startup and then daily. When the device says hello with older firmware, it shows
-"Updating firmware to …" on the display, resets the device into the ESP32-S3's
+"Updating firmware to …" on the display, resets the device into the ESP32's
 ROM bootloader over the same USB cable, writes the new firmware and resets it.
 It takes about 15 seconds; the stats come back on their own.
 
@@ -303,9 +318,6 @@ host/packaging/build-packages.sh   # writes host/dist/
 - Restart the user service after a package upgrade, so the new host takes
   effect without `systemctl --user restart nerd-deck`.
 - Build aarch64 packages as well, for ARM hosts such as a Raspberry Pi.
-- Support more boards: publish the firmware for each one. The device already
-  reports its `board`, and the asset names carry it, so the host can pick the
-  matching image.
 
 ## Releases
 

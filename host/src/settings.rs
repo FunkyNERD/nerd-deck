@@ -918,17 +918,30 @@ fn call(ui: &SettingsWindow, f: impl FnOnce() -> zbus::Result<()> + Send + 'stat
     });
 }
 
-/// Ask GitHub for the newest firmware this host can install.
+/// Ask GitHub for the newest firmware this host can install on the deck's board.
 fn check_firmware(ui: &SettingsWindow) {
     let b = ui.global::<Backend>();
+    let board = b.get_board().to_string();
+    b.set_fw_board(board.clone().into());
+    b.set_fw_latest("".into());
+    b.set_fw_needs_app("".into());
+    b.set_fw_checked(false);
+    if board.is_empty() {
+        b.set_fw_error("Connect the deck to check for its firmware.".into());
+        return;
+    }
     b.set_fw_busy("checking".into());
     b.set_fw_error("".into());
     let weak = ui.as_weak();
     thread::spawn(move || {
-        let check = updates::check_firmware();
+        let check = updates::check_firmware(&board);
         let _ = weak.upgrade_in_event_loop(move |ui| {
             let b = ui.global::<Backend>();
             b.set_fw_busy("".into());
+            // Another deck may have been plugged in meanwhile.
+            if b.get_fw_board() != board.as_str() {
+                return;
+            }
             match check {
                 Ok(check) => {
                     b.set_fw_checked(true);
@@ -949,12 +962,17 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     b.set_port(s.port.into());
     b.set_serial(s.serial.into());
     b.set_firmware(s.firmware.into());
-    b.set_board(s.board.into());
+    b.set_board(s.board.as_str().into());
     b.set_proto(s.proto as i32);
     b.set_version(if s.version.is_empty() { env!("CARGO_PKG_VERSION").into() } else { s.version }.into());
     b.set_update(s.update.into());
     b.set_flashing(s.flashing);
     b.set_flash_error(s.flash_error.unwrap_or_default().into());
+    // Check GitHub for this deck's firmware when one connects, or a deck on
+    // another board replaces it.
+    if !s.board.is_empty() && b.get_fw_board() != s.board.as_str() && b.get_check_updates() {
+        check_firmware(ui);
+    }
     b.set_display_unsupported(s.connected && (s.proto as i32) < DISPLAY_PROTO);
 }
 
@@ -1418,6 +1436,7 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     });
     on!(on_install_firmware, |ui, st| {
         let deck = st.deck.clone();
+        let board = ui.global::<Backend>().get_board().to_string();
         let weak = ui.as_weak();
         let busy = |ui: &SettingsWindow, state: &str| {
             let b = ui.global::<Backend>();
@@ -1426,7 +1445,7 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         };
         busy(&ui, "downloading");
         thread::spawn(move || {
-            let installed = updates::check_firmware()
+            let installed = updates::check_firmware(&board)
                 .and_then(|check| check.firmware.context("there's no firmware for this version of nerd-deck"))
                 .and_then(|release| updates::download_firmware(&release))
                 .and_then(|path| {
@@ -1455,9 +1474,6 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     });
 
     b.on_is_newer(|a, b| updates::is_newer(&a, &b));
-    if state.borrow().cfg.updates.check {
-        check_firmware(ui);
-    }
 
     b.on_open_url(|url| {
         if let Err(e) = Command::new("xdg-open").arg(url.as_str()).spawn() {

@@ -169,8 +169,10 @@ export global Backend {
     in property <[KnownDeck]> known;
     // The newest firmware on GitHub this app can install; empty until checked.
     in property <string> fw-latest;
-    // GitHub has answered at least once.
+    // GitHub has answered for fw-board.
     in property <bool> fw-checked;
+    // The board fw-latest is for.
+    in property <string> fw-board;
     // A newer firmware that needs a newer app first.
     in property <string> fw-needs-app;
     // "checking", "downloading" or "".

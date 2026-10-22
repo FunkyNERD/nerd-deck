@@ -1,7 +1,7 @@
 # PlatformIO post-build step: merges the bootloader, partition table, boot_app0
 # and app into one image to write at flash offset 0
-# (.pio/build/<env>/firmware-merged.bin). The host app embeds it to update the
-# device over its ROM bootloader. The flash mode/freq/size are the ones
+# (.pio/build/<env>/firmware-merged.bin). Releases publish it, and the host app
+# installs it over the ROM bootloader. The flash mode/freq/size are the ones
 # `pio run -t upload` passes to esptool, so the result matches an upload.
 Import("env")  # noqa: F821
 
