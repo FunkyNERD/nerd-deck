@@ -1,8 +1,9 @@
 //! The settings window (`nerd-deck --settings`). It edits the config file in
 //! place, keeping its comments and layout, and asks the running service to
 //! reload it after each change, so the deck follows along. Status and actions
-//! (test notifications, reinstalling firmware) go through the service's D-Bus
-//! interface (api.rs). The UI itself is in ui/settings.slint.
+//! (test notifications, installing firmware) go through the service's D-Bus
+//! interface (api.rs). Firmware is downloaded from GitHub here (updates.rs)
+//! before the service installs it. The UI itself is in ui/settings.slint.
 
 slint::include_modules!();
 
@@ -24,7 +25,7 @@ use crate::api::{NerdDeckProxyBlocking, Status};
 use crate::config::{self, Config, MAX_BUTTONS, MAX_ID_LEN, MAX_LABEL_LEN};
 use crate::firmware::KnownDevices;
 use crate::notifications::{SeenApp, SeenApps};
-use crate::{battery, collector, icons, images};
+use crate::{battery, collector, icons, images, updates};
 
 /// Held while the window is open. Opening it again asks the open one to come
 /// to the front instead (`Present`).
@@ -917,6 +918,29 @@ fn call(ui: &SettingsWindow, f: impl FnOnce() -> zbus::Result<()> + Send + 'stat
     });
 }
 
+/// Ask GitHub for the newest firmware this host can install.
+fn check_firmware(ui: &SettingsWindow) {
+    let b = ui.global::<Backend>();
+    b.set_fw_busy("checking".into());
+    b.set_fw_error("".into());
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let check = updates::check_firmware();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            let b = ui.global::<Backend>();
+            b.set_fw_busy("".into());
+            match check {
+                Ok(check) => {
+                    b.set_fw_checked(true);
+                    b.set_fw_latest(check.firmware.map(|f| f.version).unwrap_or_default().into());
+                    b.set_fw_needs_app(check.needs_app.unwrap_or_default().into());
+                }
+                Err(e) => b.set_fw_error(format!("Couldn't check GitHub: {e:#}").into()),
+            }
+        });
+    });
+}
+
 fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     let b = ui.global::<Backend>();
     let s = status.cloned().unwrap_or_default();
@@ -927,13 +951,10 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     b.set_firmware(s.firmware.into());
     b.set_board(s.board.into());
     b.set_proto(s.proto as i32);
-    b.set_bundled(
-        if s.bundled.is_empty() { crate::firmware::bundled().map(|f| f.version.to_owned()).unwrap_or_default() } else { s.bundled }
-            .into(),
-    );
     b.set_version(if s.version.is_empty() { env!("CARGO_PKG_VERSION").into() } else { s.version }.into());
     b.set_update(s.update.into());
     b.set_flashing(s.flashing);
+    b.set_flash_error(s.flash_error.unwrap_or_default().into());
     b.set_display_unsupported(s.connected && (s.proto as i32) < DISPLAY_PROTO);
 }
 
@@ -1392,9 +1413,35 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     });
 
     // ---- Firmware ----
-    on!(on_reinstall_firmware, |ui, st| {
+    on!(on_check_firmware, |ui, st| {
+        check_firmware(&ui);
+    });
+    on!(on_install_firmware, |ui, st| {
         let deck = st.deck.clone();
-        call(&ui, move || deck.reinstall_firmware());
+        let weak = ui.as_weak();
+        let busy = |ui: &SettingsWindow, state: &str| {
+            let b = ui.global::<Backend>();
+            b.set_fw_busy(state.into());
+            b.set_fw_error("".into());
+        };
+        busy(&ui, "downloading");
+        thread::spawn(move || {
+            let installed = updates::check_firmware()
+                .and_then(|check| check.firmware.context("there's no firmware for this version of nerd-deck"))
+                .and_then(|release| updates::download_firmware(&release))
+                .and_then(|path| {
+                    deck.install_firmware(&path.to_string_lossy()).map_err(|e| match e {
+                        zbus::Error::MethodError(_, Some(msg), _) => anyhow::anyhow!(msg),
+                        e => e.into(),
+                    })
+                });
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                busy(&ui, "");
+                if let Err(e) = installed {
+                    ui.global::<Backend>().set_fw_error(format!("{e:#}").into());
+                }
+            });
+        });
     });
     on!(on_forget_deck, |ui, st, index| {
         let mut known = KnownDevices::load();
@@ -1406,6 +1453,11 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             call(&ui, move || deck.reload());
         }
     });
+
+    b.on_is_newer(|a, b| updates::is_newer(&a, &b));
+    if state.borrow().cfg.updates.check {
+        check_firmware(ui);
+    }
 
     b.on_open_url(|url| {
         if let Err(e) = Command::new("xdg-open").arg(url.as_str()).spawn() {

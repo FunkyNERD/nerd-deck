@@ -3385,6 +3385,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "sha2",
  "slint",
  "slint-build",
  "sysinfo",

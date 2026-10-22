@@ -1,13 +1,14 @@
-# Builds the device firmware, then the host app's .deb and .rpm with that firmware bundled
-# (host/build.rs, host/packaging/build-packages.sh), on every push and pull request, and
-# keeps them as a run artifact. Pushing a version tag also publishes them
+# Builds the host app's .deb and .rpm, and the device firmware as a file of its own
+# (host/packaging/build-packages.sh), on every push and pull request, and keeps
+# them as a run artifact. The packages don't carry the firmware: the host downloads
+# it from the release. Pushing a version tag also publishes them
 # as a GitHub release, with notes listing every commit since the previous tag
 # (host/packaging/release-notes.sh):
 #
 #   (bump version in host/Cargo.toml, commit)
 #   git tag v1.2.3 && git push origin main v1.2.3
 #
-# The tag must match host/Cargo.toml's version. Tags with a suffix (v1.2.3-beta.1) are
+# The tag must match host/Cargo.toml's version and FW_VERSION in firmware/src/config.hpp. Tags with a suffix (v1.2.3-beta.1) are
 # published as prereleases.
 #
 # Built on Ubuntu 22.04 so the binary runs on anything with glibc 2.35 or newer
@@ -72,12 +73,12 @@ jobs:
           key: ${{ runner.os }}-platformio-6.2.0-${{ hashFiles('firmware/platformio.ini') }}
 
       - name: Build firmware
-        # The merged image (bootloader, partitions, app) the host bundles.
+        # The merged image (bootloader, partitions, app) the host downloads and installs.
         run: |
           python3 -m venv /opt/pio
           /opt/pio/bin/pip install -q platformio==6.2.0
           /opt/pio/bin/pio run -d firmware
-          echo "NERD_DECK_FIRMWARE=$GITHUB_WORKSPACE/firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin" >> "$GITHUB_ENV"
+          echo "FIRMWARE_IMAGE=$GITHUB_WORKSPACE/firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin" >> "$GITHUB_ENV"
 
       - name: Work out the version
         if: startsWith(github.ref, 'refs/tags/')
@@ -87,6 +88,9 @@ jobs:
           CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' host/Cargo.toml | head -1)
           [ "$VERSION" = "$CARGO_VERSION" ] || {
             echo "::error::Tag $TAG doesn't match host/Cargo.toml's version $CARGO_VERSION"; exit 1; }
+          FW_VERSION=$(sed -n 's/^#define FW_VERSION "\(.*\)"$/\1/p' firmware/src/config.hpp)
+          [ "$VERSION" = "$FW_VERSION" ] || {
+            echo "::error::Tag $TAG doesn't match FW_VERSION $FW_VERSION in firmware/src/config.hpp"; exit 1; }
           PRERELEASE=false
           case "$VERSION" in *-*) PRERELEASE=true ;; esac
           echo "TAG=$TAG" >> "$GITHUB_ENV"

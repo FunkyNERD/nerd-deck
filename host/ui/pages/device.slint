@@ -173,7 +173,7 @@ export component DevicePage inherits VerticalLayout {
                 Fact { label: "Serial number"; value: Backend.serial; mono: true; }
                 Fact {
                     label: "Firmware";
-                    value: Backend.firmware == "" ? "" : Backend.firmware == Backend.bundled ? Backend.firmware + " · up to date" : Backend.firmware;
+                    value: Backend.firmware == "" ? "" : Backend.fw-latest != "" && Backend.is-newer(Backend.fw-latest, Backend.firmware) ? Backend.firmware + " · " + Backend.fw-latest + " available" : Backend.firmware;
                 }
                 Fact { label: "Protocol"; value: Backend.proto == 0 ? "" : "v" + Backend.proto; }
                 Fact { label: "Screen"; value: Backend.connected ? "480 × 320, touch" : ""; }

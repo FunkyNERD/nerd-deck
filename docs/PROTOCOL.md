@@ -157,7 +157,7 @@ Fields left out keep the device's stored values.
 
 ### `hello`
 Sent on boot and in reply to the host's `hello`. `board` identifies the
-hardware the firmware was built for; the host only installs its bundled firmware
+hardware the firmware was built for; the host only installs firmware
 on a matching board. Firmware before v3 doesn't send it, and only ever ran on
 `wt32-sc01-plus`. `tile` (v5) is a Controls button's face in pixels, inside its
 border: the size button images are made to fill.
@@ -183,7 +183,7 @@ command for it. The device never sends a command string.
 ## Changes
 
 - **v2**: added the `icon` and `image` button fields and the `image` message.
-- **v3**: the device's `hello` adds `board`, so the host only installs its bundled firmware
+- **v3**: the device's `hello` adds `board`, so the host only installs firmware
   on matching hardware. Also adds the `notify` message.
 - **v4**: adds the `notification` message.
 - **v5**: the device's `hello` adds `tile`, and button images fill it. The

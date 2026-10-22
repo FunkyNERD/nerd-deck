@@ -60,9 +60,13 @@ export component FirmwarePage inherits VerticalLayout {
     }
 
     Card {
-        VerticalLayout {
+        fw := VerticalLayout {
             padding: 20px;
             spacing: 18px;
+            // The deck runs older firmware than the newest on GitHub.
+            property <bool> newer: Backend.firmware != "" && Backend.fw-latest != "" && Backend.is-newer(Backend.fw-latest, Backend.firmware);
+            property <bool> busy: Backend.flashing || Backend.fw-busy != "";
+            property <string> error: Backend.fw-error != "" ? Backend.fw-error : Backend.flash-error;
             HorizontalLayout {
                 spacing: 12px;
                 Text {
@@ -73,19 +77,30 @@ export component FirmwarePage inherits VerticalLayout {
                     horizontal-stretch: 1;
                     vertical-alignment: center;
                 }
-                if Backend.connected && !Backend.flashing && Backend.firmware == Backend.bundled: Pill { text: "Up to date"; }
+                if Backend.connected && !fw.busy && fw.newer: Pill {
+                    text: "Update available";
+                    fg: Theme.cyan;
+                    dot: Theme.cyan;
+                    background: #10272D;
+                }
+                if Backend.connected && !fw.busy && Backend.fw-latest != "" && Backend.firmware != "" && !fw.newer: Pill { text: "Up to date"; }
             }
             HorizontalLayout {
                 spacing: 12px;
                 Version { label: "On the deck"; value: Backend.firmware; }
-                Version { label: "Bundled with this app"; value: Backend.bundled; }
+                Version { label: "Latest on GitHub"; value: Backend.fw-busy == "checking" ? "…" : Backend.fw-latest; }
                 Version { label: "Built for"; value: "wt32-sc01-plus"; mono: true; }
             }
-            if Backend.flashing: VerticalLayout {
+            if fw.busy: VerticalLayout {
                 spacing: 10px;
                 HorizontalLayout {
-                    Text { text: "Writing firmware to the deck…"; font-size: 13px; color: Theme.text; horizontal-stretch: 1; }
-                    Text { text: "about 15 seconds"; font-size: 13px; color: Theme.text-dim; }
+                    Text {
+                        text: Backend.flashing ? "Writing firmware to the deck…" : Backend.fw-busy == "downloading" ? "Downloading firmware " + Backend.fw-latest + " from GitHub…" : "Checking GitHub for firmware…";
+                        font-size: 13px;
+                        color: Theme.text;
+                        horizontal-stretch: 1;
+                    }
+                    if Backend.flashing: Text { text: "about 15 seconds"; font-size: 13px; color: Theme.text-dim; }
                 }
                 Rectangle {
                     height: 6px;
@@ -100,19 +115,46 @@ export component FirmwarePage inherits VerticalLayout {
                         x: -self.width + mod(animation-tick(), 1400ms) / 1400ms * (parent.width + self.width);
                     }
                 }
-                Text {
+                if Backend.flashing: Text {
                     text: "Keep the deck plugged in. If the update is interrupted, it's retried the next time the deck connects.";
                     font-size: 12px;
                     color: Theme.text-dim;
                     wrap: word-wrap;
                 }
             }
+            if !fw.busy && fw.error != "": Text {
+                text: fw.error;
+                font-size: 12px;
+                color: Theme.red-text;
+                wrap: word-wrap;
+            }
+            if !fw.busy && Backend.fw-checked && Backend.fw-latest == "" && fw.error == "": Text {
+                text: "GitHub has no firmware for this version of nerd-deck yet.";
+                font-size: 12px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
+            if Backend.fw-needs-app != "": Text {
+                text: "Firmware " + Backend.fw-needs-app + " needs nerd-deck " + Backend.fw-needs-app + " or newer. Update this app first.";
+                font-size: 12px;
+                color: Theme.text-dim;
+                wrap: word-wrap;
+            }
             HorizontalLayout {
                 alignment: start;
+                spacing: 10px;
+                if fw.newer: PushButton {
+                    text: "Install " + Backend.fw-latest;
+                    icon: Glyphs.download;
+                    primary: true;
+                    enabled: Backend.connected && !fw.busy;
+                    clicked => { Backend.install-firmware(); }
+                }
                 PushButton {
-                    text: "Reinstall firmware";
-                    enabled: Backend.connected && !Backend.flashing && Backend.bundled != "";
-                    clicked => { Backend.reinstall-firmware(); }
+                    text: "Check for updates";
+                    flat: true;
+                    enabled: !fw.busy;
+                    clicked => { Backend.check-firmware(); }
                 }
             }
         }
@@ -123,7 +165,7 @@ export component FirmwarePage inherits VerticalLayout {
         VerticalLayout {
             SettingRow {
                 title: "Keep the deck's firmware up to date";
-                subtitle: "Installs this app's firmware when the deck's is older. Never downgrades, and only on the board it's built for.";
+                subtitle: "Downloads new firmware from GitHub and installs it when the deck's is older. Never downgrades, and only on the board it's built for.";
                 Toggle {
                     label: "Keep the deck's firmware up to date";
                     checked: Backend.auto-firmware;

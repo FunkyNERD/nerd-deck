@@ -25,6 +25,8 @@ sysinfo = "0.32"
 toml = "0.8"
 # The daily update check against the GitHub releases API.
 ureq = { version = "3.5.0", features = ["json"] }
+# Checks downloaded firmware against the release's digest.
+sha2 = "0.11"
 espflash = { version = "4.6.0", default-features = false, features = ["serialport"] }
 # Desktop notifications off the session bus. 5.x: 6 dropped the blocking API.
 zbus = "5.19.0"

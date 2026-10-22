@@ -1,5 +1,5 @@
-//! The service's D-Bus interface on the session bus. The tray (and later a
-//! settings window) uses it to see the service's state and steer it.
+//! The service's D-Bus interface on the session bus. The tray and the
+//! settings window use it to see the service's state and steer it.
 //!
 //! Method calls run on zbus's own thread; they hand a `Command` to the main
 //! loop, which owns the device, and wait for its reply.
@@ -39,10 +39,12 @@ pub struct Status {
     /// empty and 0 until it says hello.
     pub board: String,
     pub proto: u32,
-    /// The firmware this host bundles; empty if none.
-    pub bundled: String,
-    /// The bundled firmware is being installed on the deck.
+    /// Firmware is being installed on the deck.
     pub flashing: bool,
+    /// Why the last install failed; None when it worked or none was tried.
+    /// Optional, as fields added later must be, so a newer client can still
+    /// read an older service's status.
+    pub flash_error: Option<String>,
     /// This host's version.
     pub version: String,
     /// A newer nerd-deck release, if the update check found one.
@@ -59,8 +61,9 @@ pub enum Command {
     Reload(Reply),
     /// Show a sample notification on the deck, whatever the filters say.
     TestNotification { critical: bool, reply: Reply },
-    /// Install the bundled firmware on the deck, whatever it runs now.
-    ReinstallFirmware(Reply),
+    /// Install the firmware image at this path on the deck, if it's newer than
+    /// what the deck runs.
+    InstallFirmware { path: String, reply: Reply },
 }
 
 /// The service's side: holds the status and tells clients when it changes.
@@ -138,9 +141,10 @@ impl Api {
         self.call(|reply| Command::TestNotification { critical, reply })
     }
 
-    /// Starts the install and returns; `Status.flashing` follows it.
-    fn reinstall_firmware(&self) -> fdo::Result<()> {
-        self.call(Command::ReinstallFirmware)
+    /// Checks the image, starts the install and returns; `Status.flashing`
+    /// and `Status.flash_error` follow it.
+    fn install_firmware(&self, path: String) -> fdo::Result<()> {
+        self.call(|reply| Command::InstallFirmware { path, reply })
     }
 
     /// Emitted when anything in `Status` changes.
@@ -158,7 +162,7 @@ pub trait NerdDeck {
     fn status(&self) -> zbus::Result<Status>;
     fn reload(&self) -> zbus::Result<()>;
     fn test_notification(&self, critical: bool) -> zbus::Result<()>;
-    fn reinstall_firmware(&self) -> zbus::Result<()>;
+    fn install_firmware(&self, path: &str) -> zbus::Result<()>;
     #[zbus(signal)]
     fn status_changed(&self) -> zbus::Result<()>;
 }

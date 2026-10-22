@@ -163,8 +163,8 @@ impl Default for StatsConfig {
 pub struct UpdatesConfig {
     /// Check GitHub daily for a newer release and show a notice on the device.
     pub check: bool,
-    /// Install the device firmware bundled with this build when the device's
-    /// is older (only on the board it's built for).
+    /// Download new device firmware from GitHub releases and install it when
+    /// the device's is older (only on the board it's built for).
     pub firmware: bool,
 }
 

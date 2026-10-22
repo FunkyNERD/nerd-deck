@@ -76,10 +76,11 @@ export global Backend {
     in property <string> firmware;
     in property <string> board;
     in property <int> proto;
-    in property <string> bundled;
     in property <string> version;
     in property <string> update;
     in property <bool> flashing;
+    // Why the service's last install failed.
+    in property <string> flash-error;
 
     // A problem saving or applying the last change; empty when all is well.
     in-out property <string> problem;
@@ -166,7 +167,20 @@ export global Backend {
 
     // Firmware
     in property <[KnownDeck]> known;
-    callback reinstall-firmware();
+    // The newest firmware on GitHub this app can install; empty until checked.
+    in property <string> fw-latest;
+    // GitHub has answered at least once.
+    in property <bool> fw-checked;
+    // A newer firmware that needs a newer app first.
+    in property <string> fw-needs-app;
+    // "checking", "downloading" or "".
+    in property <string> fw-busy;
+    // Checking or downloading failed.
+    in property <string> fw-error;
+    callback check-firmware();
+    pure callback is-newer(string, string) -> bool;
+    // Downloads the newest firmware and has the service install it.
+    callback install-firmware();
     callback forget-deck(int);
 
     // About

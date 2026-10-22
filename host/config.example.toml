@@ -28,7 +28,7 @@ temp_hot = 85             # and red from here
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device
-firmware = true           # install this release's device firmware when the device's is older
+firmware = true           # download new device firmware from GitHub and install it when the device's is older
 
 [notifications]
 enabled = false           # also show desktop notifications (new mail, chat, ...) on the device

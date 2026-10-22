@@ -3,7 +3,6 @@
 #
 #   ./install.sh               build, install binary, udev rule, service
 #   ./install.sh --no-udev     skip the udev rule (no sudo needed)
-#   ./install.sh --no-firmware don't bundle the device firmware (no PlatformIO needed)
 #   ./install.sh --no-service  don't install/enable the systemd user service
 #   ./install.sh --no-tray     don't start the tray icon at login
 #   ./install.sh --uninstall   remove everything this script installed (config is kept)
@@ -24,7 +23,6 @@ TRAY=nerd-deck-tray.desktop
 do_udev=1
 do_service=1
 do_tray=1
-do_firmware=1
 uninstall=0
 
 for arg in "$@"; do
@@ -32,7 +30,6 @@ for arg in "$@"; do
         --no-udev) do_udev=0 ;;
         --no-service) do_service=0 ;;
         --no-tray) do_tray=0 ;;
-        --no-firmware) do_firmware=0 ;;
         --uninstall) uninstall=1 ;;
         -h | --help)
             sed -n '2,10s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
@@ -81,20 +78,6 @@ check_deps() {
         die "cargo not found. Install Rust: https://rustup.rs (then: source ~/.cargo/env)"
     command -v pkg-config >/dev/null && pkg-config --exists libudev fontconfig ||
         die "libudev or fontconfig headers not found. Install them: sudo apt install build-essential pkg-config libudev-dev libfontconfig1-dev"
-}
-
-# Builds the device firmware so the host bundles it and keeps the device up to
-# date (host/build.rs). Skipped, with a warning, when PlatformIO isn't installed.
-build_firmware() {
-    local pio
-    pio=$(command -v pio || echo "$HOME/.platformio/penv/bin/pio")
-    if [[ ! -x $pio ]]; then
-        warn "PlatformIO not found; building without device firmware, so the device won't be updated"
-        return
-    fi
-    info "Building device firmware"
-    "$pio" run --silent -d "$HOST_DIR/../firmware"
-    export NERD_DECK_FIRMWARE="$HOST_DIR/../firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin"
 }
 
 install_binary() {
@@ -166,7 +149,6 @@ if ((uninstall)); then
 fi
 
 check_deps
-((do_firmware)) && build_firmware
 install_binary
 ((do_udev)) && install_udev
 ((do_service)) && install_service

@@ -20,7 +20,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use base64::Engine;
 use clap::Parser;
 
@@ -60,10 +60,10 @@ struct Cli {
     #[arg(long)]
     dump: bool,
 
-    /// Install the bundled device firmware now, whatever the device runs, and
-    /// exit. Stop the service first; it holds the port.
-    #[arg(long)]
-    flash_firmware: bool,
+    /// Install this firmware image (a merged .bin) now, whatever the device
+    /// runs, and exit. Stop the service first; it holds the port.
+    #[arg(long, value_name = "FILE")]
+    flash_firmware: Option<PathBuf>,
 
     /// Show the tray icon, which talks to the running service
     #[arg(long)]
@@ -102,8 +102,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if cli.flash_firmware {
-        let fw = firmware::bundled().context("this build has no bundled firmware")?;
+    if let Some(path) = cli.flash_firmware {
+        let fw = firmware::Image::load(&path)?;
         let port = device::find_port(&cfg.device)?;
         log::info!("installing firmware {} on {}", fw.version, port.name);
         return firmware::flash(&fw, &port.name, usb_info(&cfg, &port));
@@ -123,12 +123,10 @@ fn new_collector(cfg: &Config) -> Collector {
 
 /// Why a session ended other than by an error.
 enum SessionEnd {
-    /// The port is closed; install the bundled firmware on this device.
-    Flash(device::Port),
+    /// The port is closed; install this firmware on the device.
+    Flash(device::Port, firmware::Image),
     /// The device settings changed; connect again with the new ones.
     Reconnect,
-    /// Asked for over D-Bus: install the bundled firmware whatever the device runs.
-    Reinstall(device::Port),
 }
 
 /// The service: streams stats to the deck, runs its buttons, and answers the
@@ -141,6 +139,7 @@ struct Host {
     /// Started once the config turns them on; a reload never stops them, but
     /// their results are only used while the config says so.
     updates: Option<updates::Shared>,
+    fetching_firmware: bool,
     notifications: Option<Receiver<notifications::Raw>>,
     seen_apps: notifications::SeenApps,
     flashing: firmware::Flashing,
@@ -153,7 +152,6 @@ impl Host {
         let (tx, commands) = mpsc::channel();
         let status = api::Status {
             version: env!("CARGO_PKG_VERSION").into(),
-            bundled: firmware::bundled().map(|fw| fw.version.to_owned()).unwrap_or_default(),
             config: config_path
                 .clone()
                 .or_else(Config::default_path)
@@ -167,6 +165,7 @@ impl Host {
             flashing: firmware::Flashing::new(&cfg),
             cfg,
             updates: None,
+            fetching_firmware: false,
             notifications: None,
             seen_apps: notifications::SeenApps::load(),
             api: api::Service::start(status, tx),
@@ -180,6 +179,10 @@ impl Host {
         if self.cfg.updates.check && self.updates.is_none() {
             self.updates = Some(updates::watch());
         }
+        if self.cfg.updates.firmware && !self.fetching_firmware {
+            updates::fetch_firmware();
+            self.fetching_firmware = true;
+        }
         if self.cfg.notifications.enabled && self.notifications.is_none() {
             self.notifications = Some(notifications::watch());
         }
@@ -188,25 +191,31 @@ impl Host {
     fn run(mut self) -> Result<()> {
         loop {
             match self.run_session() {
-                Ok(SessionEnd::Flash(port)) => {
-                    self.flashing.flash(&port, usb_info(&self.cfg, &port));
+                Ok(SessionEnd::Flash(port, fw)) => {
+                    self.api.update(|s| {
+                        disconnected(s);
+                        s.flashing = true;
+                        s.flash_error = None;
+                    });
+                    log::info!("installing firmware {} on {}", fw.version, port.name);
+                    let error = match firmware::flash(&fw, &port.name, usb_info(&self.cfg, &port)) {
+                        Ok(()) => {
+                            log::info!("installed firmware {}; waiting for the device to restart", fw.version);
+                            None
+                        }
+                        Err(e) => {
+                            log::error!("firmware update failed: {e:#}");
+                            Some(format!("{e:#}"))
+                        }
+                    };
+                    self.api.update(|s| {
+                        s.flashing = false;
+                        s.flash_error = error;
+                    });
                 }
                 Ok(SessionEnd::Reconnect) => {
                     self.api.update(disconnected);
                     continue;
-                }
-                Ok(SessionEnd::Reinstall(port)) => {
-                    self.api.update(|s| {
-                        disconnected(s);
-                        s.flashing = true;
-                    });
-                    if let Some(fw) = firmware::bundled() {
-                        log::info!("reinstalling firmware {} on {}", fw.version, port.name);
-                        if let Err(e) = firmware::flash(&fw, &port.name, usb_info(&self.cfg, &port)) {
-                            log::error!("firmware reinstall failed: {e:#}");
-                        }
-                    }
-                    self.api.update(|s| s.flashing = false);
                 }
                 Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
             }
@@ -224,7 +233,7 @@ impl Host {
                 Command::Reload(reply) => {
                     let _ = reply.send(self.reload().map(drop).map_err(|e| format!("{e:#}")));
                 }
-                Command::TestNotification { reply, .. } | Command::ReinstallFirmware(reply) => {
+                Command::TestNotification { reply, .. } | Command::InstallFirmware { reply, .. } => {
                     let _ = reply.send(Err("the deck isn't connected".into()));
                 }
             }
@@ -281,6 +290,8 @@ impl Host {
         // The update check's `seq` last shown on the device; 0 = none this session.
         let mut notified = 0;
         let mut said_hello = false;
+        // The deck's firmware version, once it says hello.
+        let mut deck_fw = String::new();
 
         loop {
             let available = self.updates.as_ref().and_then(|u| u.lock().unwrap().clone());
@@ -324,16 +335,29 @@ impl Host {
                         let _ = reply.send(sent.as_ref().map_err(|e| e.to_string()).copied());
                         sent?;
                     }
-                    Command::ReinstallFirmware(reply) => {
-                        if firmware::bundled().is_none() {
-                            let _ = reply.send(Err("this build has no bundled firmware".into()));
-                            continue;
-                        }
+                    Command::InstallFirmware { path, reply } => {
+                        let fw = firmware::Image::load(path.as_ref()).map_err(|e| format!("{e:#}")).and_then(|fw| {
+                            // Updates only: never the same or an older version.
+                            if updates::is_newer(&fw.version, &deck_fw) {
+                                Ok(fw)
+                            } else if deck_fw.is_empty() {
+                                Err("the deck hasn't said which firmware it runs yet".into())
+                            } else {
+                                Err(format!("the deck already runs {deck_fw}, which isn't older than {}", fw.version))
+                            }
+                        });
+                        let fw = match fw {
+                            Ok(fw) => fw,
+                            Err(e) => {
+                                let _ = reply.send(Err(e));
+                                continue;
+                            }
+                        };
                         let _ = reply.send(Ok(()));
-                        let text = "Reinstalling firmware...".to_owned();
+                        let text = format!("Installing firmware {}...", fw.version);
                         conn.send(&HostMsg::Notify { text })?;
                         thread::sleep(Duration::from_secs(2));
-                        return Ok(SessionEnd::Reinstall(port));
+                        return Ok(SessionEnd::Flash(port, fw));
                     }
                 }
             }
@@ -341,8 +365,8 @@ impl Host {
             // A device that never says hello may be stuck after an interrupted flash.
             if !said_hello && opened.elapsed() >= HELLO_TIMEOUT {
                 said_hello = true; // only decide once per session
-                if self.flashing.should_recover(&port) {
-                    return Ok(SessionEnd::Flash(port));
+                if let Some(fw) = self.flashing.should_recover(&port).and_then(load_firmware) {
+                    return Ok(SessionEnd::Flash(port, fw));
                 }
                 log::warn!("no hello from the device after {}s", HELLO_TIMEOUT.as_secs());
             }
@@ -357,6 +381,7 @@ impl Host {
                     if let DeviceMsg::Hello { fw, board, proto, tile: t } = &msg {
                         said_hello = true;
                         tile = *t;
+                        deck_fw = fw.clone();
                         // The device rebooted, so it lost any notice.
                         notified = 0;
                         self.api.update(|s| {
@@ -364,14 +389,13 @@ impl Host {
                             s.proto = *proto;
                             s.board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
                         });
-                        if let Some(version) =
-                            self.flashing.should_update(&port, fw, board.as_deref())
-                        {
-                            let text = format!("Updating firmware to {version}...");
+                        let update = self.flashing.should_update(&port, fw, board.as_deref());
+                        if let Some(fw) = update.and_then(load_firmware) {
+                            let text = format!("Updating firmware to {}...", fw.version);
                             conn.send(&HostMsg::Notify { text })?;
                             // Leave the notice up briefly; the screen freezes while flashing.
                             thread::sleep(Duration::from_secs(2));
-                            return Ok(SessionEnd::Flash(port));
+                            return Ok(SessionEnd::Flash(port, fw));
                         }
                     }
                     handle(&self.cfg, &mut conn, msg)?
@@ -381,6 +405,12 @@ impl Host {
             }
         }
     }
+}
+
+fn load_firmware(cached: firmware::Cached) -> Option<firmware::Image> {
+    firmware::Image::load(&cached.path)
+        .inspect_err(|e| log::warn!("{e:#}"))
+        .ok()
 }
 
 fn disconnected(s: &mut api::Status) {

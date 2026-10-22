@@ -4,6 +4,12 @@
 #
 #   packaging/build-packages.sh
 #
+# The packages don't carry the device firmware. Set FIRMWARE_IMAGE to a merged
+# image (firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin) to put it in
+# dist/ beside them, as its own release asset named
+# nerd-deck-firmware-<version>-<board>-proto<N>.bin, which the host downloads
+# (host/src/firmware.rs reads the name).
+#
 # Needs cargo-deb and cargo-generate-rpm:
 #   cargo install --locked cargo-deb cargo-generate-rpm
 #
@@ -24,6 +30,17 @@ mkdir -p "$DIST"
 cargo deb --no-build --locked --output "$DIST/"
 cargo generate-rpm --output "$DIST/"
 
+if [[ -n ${FIRMWARE_IMAGE:-} ]]; then
+    config="$HOST_DIR/../firmware/src/config.hpp"
+    fw_version=$(sed -n 's/^#define FW_VERSION "\(.*\)"$/\1/p' "$config")
+    fw_board=$(sed -n 's/^#define FW_BOARD "\(.*\)"$/\1/p' "$config")
+    fw_proto=$(sed -n 's/.*kProtoVersion = \([0-9]*\);.*/\1/p' "$config")
+    [[ -n $fw_version && -n $fw_board && -n $fw_proto ]] || { echo "can't read $config" >&2; exit 1; }
+    grep -qa "nerd-deck-firmware:$fw_board:$fw_version;" "$FIRMWARE_IMAGE" ||
+        { echo "$FIRMWARE_IMAGE isn't firmware $fw_version for $fw_board" >&2; exit 1; }
+    cp "$FIRMWARE_IMAGE" "$DIST/nerd-deck-firmware-$fw_version-$fw_board-proto$fw_proto.bin"
+fi
+
 cd "$DIST"
-sha256sum -- *.deb *.rpm >SHA256SUMS
+sha256sum -- * >SHA256SUMS
 cat SHA256SUMS
