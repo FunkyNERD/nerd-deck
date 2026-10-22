@@ -1,6 +1,6 @@
 [package]
 name = "nerd-deck"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "Streams system stats to a nerd-deck display over USB and runs its button commands"
 license = "MIT"
