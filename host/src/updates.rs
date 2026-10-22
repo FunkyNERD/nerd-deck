@@ -1,8 +1,8 @@
-//! Checks GitHub for a newer release, once at startup and then daily. A new
-//! host only gets a notice on the device; installing it stays with the package
-//! manager or install.sh. Device firmware is a release asset of its own, which
-//! the settings window, and the service when it keeps the deck up to date,
-//! download into the cache (firmware.rs).
+//! Checks GitHub for a newer release of the app, once at startup and then
+//! daily. It only gets a notice on the device; installing it stays with the
+//! package manager or install.sh. The device firmware has releases of its own
+//! (firmware-v* tags), which the settings window, and the service when it keeps
+//! the deck up to date, download into the cache (firmware.rs).
 
 use std::fs;
 use std::io::Read;
@@ -86,7 +86,7 @@ pub fn watch() -> Shared {
             loop {
                 let wait = match latest() {
                     Ok(release) => {
-                        let version = release.tag_name.trim_start_matches('v').to_owned();
+                        let version = app_version(&release.tag_name).unwrap_or_default().to_owned();
                         if is_newer(&version, env!("CARGO_PKG_VERSION")) {
                             log::info!("nerd-deck {version} is available: {}", release.html_url);
                             seq += 1;
@@ -110,6 +110,14 @@ pub fn watch() -> Shared {
     found
 }
 
+/// The app's version in a release tag: host-v1.2.3, or v1.2.3 from before the
+/// app and the firmware were released apart. Firmware releases (firmware-v*)
+/// never take "Latest", but they aren't the app's either way.
+fn app_version(tag: &str) -> Option<&str> {
+    tag.strip_prefix("host-v").or_else(|| tag.strip_prefix('v'))
+}
+
+/// The release GitHub marks "Latest", which is always the app's.
 fn latest() -> Result<Release> {
     api("releases/latest").context("parsing the release")
 }
@@ -254,6 +262,13 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_app_tags() {
+        assert_eq!(app_version("host-v0.7.0"), Some("0.7.0"));
+        assert_eq!(app_version("v0.6.0"), Some("0.6.0"));
+        assert_eq!(app_version("firmware-v0.7.0"), None);
+    }
 
     #[test]
     fn compares_versions() {

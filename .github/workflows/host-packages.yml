@@ -1,15 +1,14 @@
-# Builds the host app's .deb and .rpm, and the device firmware as a file of its own
-# (host/packaging/build-packages.sh), on every push and pull request, and keeps
-# them as a run artifact. The packages don't carry the firmware: the host downloads
-# it from the release. Pushing a version tag also publishes them
-# as a GitHub release, with notes listing every commit since the previous tag
-# (host/packaging/release-notes.sh):
+# Builds the host app's .deb and .rpm (host/packaging/build-packages.sh) on every push
+# and pull request that touches the app, and keeps them as a run artifact. Pushing a
+# host-v* tag also publishes them as a GitHub release, with notes listing the app's
+# commits since its previous release (.github/scripts/release-notes.sh):
 #
 #   (bump version in host/Cargo.toml, commit)
-#   git tag v1.2.3 && git push origin main v1.2.3
+#   git tag host-v1.2.3 && git push origin main host-v1.2.3
 #
-# The tag must match host/Cargo.toml's version and FW_VERSION in firmware/src/config.hpp. Tags with a suffix (v1.2.3-beta.1) are
-# published as prereleases.
+# The tag must match host/Cargo.toml's version. Tags with a suffix (host-v1.2.3-beta.1)
+# are published as prereleases. The firmware is released apart (firmware.yml); the app
+# downloads it from those releases.
 #
 # Built on Ubuntu 22.04 so the binary runs on anything with glibc 2.35 or newer
 # (Debian 12+, Ubuntu 22.04+, Fedora 36+).
@@ -18,8 +17,15 @@ name: Host packages
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ['host-v*']
+    # Tag pushes always run; GitHub doesn't apply path filters to them.
+    paths: &paths
+      - 'host/**'
+      - 'docs/**'
+      - '.github/workflows/host-packages.yml'
+      - '.github/scripts/**'
   pull_request:
+    paths: *paths
   workflow_dispatch:
 
 permissions:
@@ -37,7 +43,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq && apt-get install -y -qq curl ca-certificates git \
-            build-essential pkg-config libudev-dev libfontconfig1-dev python3 python3-venv >/dev/null
+            build-essential pkg-config libudev-dev libfontconfig1-dev >/dev/null
           curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
@@ -66,31 +72,14 @@ jobs:
         if: steps.tools-cache.outputs.cache-hit != 'true'
         run: cargo install --locked --root /opt/cargo-tools cargo-deb@3.8.0 cargo-generate-rpm@0.21.1
 
-      - name: Cache PlatformIO
-        uses: actions/cache@v6
-        with:
-          path: ~/.platformio
-          key: ${{ runner.os }}-platformio-6.2.0-${{ hashFiles('firmware/platformio.ini') }}
-
-      - name: Build firmware
-        # The merged image (bootloader, partitions, app) the host downloads and installs.
-        run: |
-          python3 -m venv /opt/pio
-          /opt/pio/bin/pip install -q platformio==6.2.0
-          /opt/pio/bin/pio run -d firmware
-          echo "FIRMWARE_IMAGE=$GITHUB_WORKSPACE/firmware/.pio/build/wt32-sc01-plus/firmware-merged.bin" >> "$GITHUB_ENV"
-
       - name: Work out the version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          VERSION="${TAG#host-v}"
           CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' host/Cargo.toml | head -1)
           [ "$VERSION" = "$CARGO_VERSION" ] || {
             echo "::error::Tag $TAG doesn't match host/Cargo.toml's version $CARGO_VERSION"; exit 1; }
-          FW_VERSION=$(sed -n 's/^#define FW_VERSION "\(.*\)"$/\1/p' firmware/src/config.hpp)
-          [ "$VERSION" = "$FW_VERSION" ] || {
-            echo "::error::Tag $TAG doesn't match FW_VERSION $FW_VERSION in firmware/src/config.hpp"; exit 1; }
           PRERELEASE=false
           case "$VERSION" in *-*) PRERELEASE=true ;; esac
           echo "TAG=$TAG" >> "$GITHUB_ENV"
@@ -115,14 +104,16 @@ jobs:
         run: |
           # The checkout belongs to another uid than the container's root.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          host/packaging/release-notes.sh "$TAG" "$GITHUB_REPOSITORY" > notes.md
+          .github/scripts/release-notes.sh "$TAG" "$GITHUB_REPOSITORY" > notes.md
           cat notes.md
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          name: nerd-deck ${{ env.VERSION }}
+          name: nerd-deck app ${{ env.VERSION }}
           body_path: notes.md
           prerelease: ${{ env.PRERELEASE }}
+          # Firmware releases never take "Latest", so it always points at the app.
+          make_latest: ${{ env.PRERELEASE != 'true' }}
           files: host/dist/*

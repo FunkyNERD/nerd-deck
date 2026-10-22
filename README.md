@@ -237,9 +237,10 @@ Logs: `journalctl --user -u nerd-deck -f`
 
 ### Firmware updates
 
-The device firmware is published with each release as a file of its own,
-`nerd-deck-firmware-<version>-wt32-sc01-plus-proto<N>.bin`; the packages don't
-carry it. The settings window's Firmware page checks GitHub for the newest
+The device firmware has releases of its own, apart from the app's (see
+[Releases](#releases)), each with one file,
+`nerd-deck-firmware-<version>-wt32-sc01-plus-proto<N>.bin`; the app's packages
+don't carry it. The settings window's Firmware page checks GitHub for the newest
 firmware that speaks this host's protocol, and **Install** downloads it, checks
 it against the release's SHA-256 digest and the board and version inside the
 image, and has the service install it. Firmware that needs a newer protocol is
@@ -283,16 +284,8 @@ created on first start:
 systemctl --user enable --now nerd-deck
 ```
 
-CI builds both packages on every push (`.github/workflows/host-packages.yml`) and
-keeps them as a run artifact. To cut a release, set the version in
-`host/Cargo.toml`, commit, then push a matching tag:
-
-```bash
-git tag v0.2.0 && git push origin main v0.2.0
-```
-
-CI publishes the release with both packages attached. Its notes list every commit
-since the previous tag, grouped by type (`host/packaging/release-notes.sh`).
+CI builds both packages on every push that touches the app
+(`.github/workflows/host-packages.yml`) and keeps them as a run artifact.
 To build the packages locally:
 
 ```bash
@@ -313,6 +306,44 @@ host/packaging/build-packages.sh   # writes host/dist/
 - Support more boards: publish the firmware for each one. The device already
   reports its `board`, and the asset names carry it, so the host can pick the
   matching image.
+
+## Releases
+
+The app and the firmware are released apart, each with its own version and tag
+prefix, so either can ship without the other:
+
+| | Version in | Tag | Release has | Workflow |
+|---|---|---|---|---|
+| App | `host/Cargo.toml` | `host-v1.2.3` | `.deb`, `.rpm`, SHA256SUMS | `host-packages.yml` |
+| Firmware | `FW_VERSION` in `firmware/src/config.hpp` | `firmware-v1.2.3` | the image, SHA256SUMS | `firmware.yml` |
+
+Set the version, commit, then push a matching tag; CI checks they agree and
+publishes the release:
+
+```bash
+git tag host-v0.7.0 && git push origin main host-v0.7.0
+git tag firmware-v0.7.0 && git push origin main firmware-v0.7.0
+```
+
+A tag with a suffix (`host-v0.7.0-beta.1`) is published as a prerelease, which
+the app's update checks ignore. The app's releases are always GitHub's "Latest";
+the firmware's never are. Each release's notes list the commits since that
+side's previous release that touch its folder or the docs, grouped by type
+(`.github/scripts/release-notes.sh`). Releases up to 0.6.0 were tagged `v*` and
+carried both.
+
+The protocol version (`kProtoVersion` in the firmware, `PROTO_VERSION` in the
+app) is what ties them together. The app installs the newest firmware that
+speaks its protocol, so a release on either side that keeps the protocol works
+with the other's current release. When the protocol changes, release the app
+that speaks it first; until then the app only mentions the new firmware, with
+a note to update the app.
+
+To build the firmware release file locally (needs PlatformIO):
+
+```bash
+firmware/package.sh   # writes firmware/dist/
+```
 
 ## License
 

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Prints release notes in Markdown for a tag: every commit since the previous
-# v* tag (or since the start, for the first release), grouped by Conventional
-# Commit type, each with its message body.
+# release of the same side (or since the start, for the first release),
+# grouped by Conventional Commit type, each with its message body.
 #
-#   host/packaging/release-notes.sh v1.2.3 [owner/repo]
+#   .github/scripts/release-notes.sh host-v1.2.3 [owner/repo]
+#   .github/scripts/release-notes.sh firmware-v1.2.3 [owner/repo]
+#
+# The app (host-v*) and the firmware (firmware-v*) are released apart, so each
+# only lists commits that touch its own folder (and the shared docs). Releases
+# before the split were tagged v* and covered both; the first of each side
+# counts from the last of those.
 #
 # With owner/repo, ends with a link to the full diff on GitHub.
 set -euo pipefail
@@ -11,7 +17,14 @@ set -euo pipefail
 tag=${1:?usage: release-notes.sh <tag> [owner/repo]}
 repo=${2:-}
 
-prev=$(git describe --tags --abbrev=0 --match 'v*' "${tag}^" 2>/dev/null || true)
+case $tag in
+    host-v*) side=host ;;
+    firmware-v*) side=firmware ;;
+    *) echo "release-notes.sh: $tag isn't host-v* or firmware-v*" >&2; exit 1 ;;
+esac
+
+prev=$(git describe --tags --abbrev=0 --match "$side-v*" "${tag}^" 2>/dev/null ||
+    git describe --tags --abbrev=0 --match 'v*' "${tag}^" 2>/dev/null || true)
 range=${prev:+$prev..}$tag
 
 # Section order and headings; anything else lands in "Other changes".
@@ -24,7 +37,7 @@ declare -A heading=(
 declare -A section
 
 # Captured first so a git failure stops the script instead of reading as no commits.
-log=$(git log --no-merges --format='%h%x1f%s%x1f%b%x1e' "$range")
+log=$(git log --no-merges --format='%h%x1f%s%x1f%b%x1e' "$range" -- "$side" docs README.md)
 
 # One record per commit: hash, subject, body, split on unit/record separators.
 while IFS=$'\x1f' read -r -d $'\x1e' hash subject body; do

@@ -3,3 +3,4 @@
 /host/target/
 /.claude/settings.local.json*
 /host/dist/
+/firmware/dist/

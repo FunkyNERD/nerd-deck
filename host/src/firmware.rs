@@ -69,7 +69,7 @@ pub fn cache_dir() -> Option<PathBuf> {
 
 /// A release asset's name, which the cached copy keeps:
 /// nerd-deck-firmware-<version>-<board>-proto<N>.bin (the release workflow
-/// names it, host/packaging/build-packages.sh).
+/// names it, firmware/package.sh).
 #[cfg(test)]
 pub fn file_name(version: &str, proto: u32) -> String {
     format!("nerd-deck-firmware-{version}-{BOARD}-proto{proto}.bin")
