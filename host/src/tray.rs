@@ -14,7 +14,8 @@ use ksni::{Icon, MenuItem, ToolTip};
 use zbus::blocking::Connection;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
-use crate::api::{NerdDeckProxyBlocking, Status};
+use crate::api::{self, NerdDeckProxyBlocking, Status};
+use crate::unit;
 
 /// The app name on the tray's own desktop notifications. The service never
 /// copies these to the deck.
@@ -60,6 +61,13 @@ pub fn run() -> Result<()> {
             Err(e) => log::warn!("not watching for status changes: {e}"),
         });
     }
+    {
+        let refresh = refresh.clone();
+        thread::spawn(move || match api::service_comings_and_goings(&bus) {
+            Ok(changes) => changes.for_each(|_| refresh()),
+            Err(e) => log::warn!("not watching for the service starting and stopping: {e}"),
+        });
+    }
     loop {
         thread::sleep(POLL);
         refresh();
@@ -96,6 +104,16 @@ impl DeckTray {
                     zbus::Error::MethodError(_, Some(msg), _) => msg,
                     e => e.to_string(),
                 };
+                log::warn!("{what}: {msg}");
+                desktop_notification(what, &msg);
+            }
+        });
+    }
+
+    /// Start or stop the service's unit off the tray's thread.
+    fn control(&self, what: &'static str, f: fn() -> Result<(), String>) {
+        thread::spawn(move || {
+            if let Err(msg) = f() {
                 log::warn!("{what}: {msg}");
                 desktop_notification(what, &msg);
             }
@@ -212,6 +230,25 @@ impl ksni::Tray for DeckTray {
             .into(),
         );
         menu.push(MenuItem::Separator);
+        menu.push(if running {
+            StandardItem {
+                label: "Stop service".into(),
+                // Stopping mid-install would leave the deck without firmware.
+                enabled: !self.status.as_ref().is_some_and(|s| s.flashing),
+                icon_name: "media-playback-stop".into(),
+                activate: Box::new(|t: &mut Self| t.control("Stop service", unit::stop)),
+                ..Default::default()
+            }
+            .into()
+        } else {
+            StandardItem {
+                label: "Start service".into(),
+                icon_name: "media-playback-start".into(),
+                activate: Box::new(|t: &mut Self| t.control("Start service", unit::start)),
+                ..Default::default()
+            }
+            .into()
+        });
         menu.push(
             StandardItem {
                 label: "Quit tray".into(),

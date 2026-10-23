@@ -14,6 +14,7 @@ mod power_profile;
 mod protocol;
 mod settings;
 mod tray;
+mod unit;
 mod updates;
 
 use std::path::PathBuf;

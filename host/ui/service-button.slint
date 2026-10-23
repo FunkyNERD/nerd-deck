@@ -1,0 +1,16 @@
+import { Glyphs } from "theme.slint";
+import { Backend } from "backend.slint";
+import { PushButton } from "widgets.slint";
+
+// Starts the service when it isn't running, and stops it when it is.
+export component ServiceButton inherits PushButton {
+    text: Backend.service-busy == "starting" ? "Starting…"
+        : Backend.service-busy == "stopping" ? "Stopping…"
+        : Backend.service-running ? "Stop service" : "Start service";
+    icon: Backend.service-running ? Glyphs.stop : Glyphs.play;
+    // Stopping mid-install would leave the deck without firmware.
+    enabled: Backend.service-busy == "" && !(Backend.service-running && Backend.flashing);
+    clicked => {
+        if Backend.service-running { Backend.stop-service(); } else { Backend.start-service(); }
+    }
+}

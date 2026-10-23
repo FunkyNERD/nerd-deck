@@ -5,6 +5,7 @@ import "fonts/fa-solid-900.ttf";
 import { ScrollView, Palette } from "std-widgets.slint";
 import { Theme, Glyphs } from "theme.slint";
 import { Backend } from "backend.slint";
+import { ServiceButton } from "service-button.slint";
 import { Glyph, PushButton } from "widgets.slint";
 import { DevicePage } from "pages/device.slint";
 import { ButtonsPage } from "pages/buttons.slint";
@@ -230,6 +231,7 @@ export component SettingsWindow inherits Window {
                             color: Theme.text-dim;
                             overflow: elide;
                         }
+                        ServiceButton { }
                     }
                 }
             }

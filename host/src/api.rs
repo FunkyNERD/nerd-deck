@@ -163,6 +163,14 @@ impl Api {
     async fn status_changed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
+/// Yields each time the service claims or drops its name on the bus: when it
+/// starts and stops.
+pub fn service_comings_and_goings(bus: &Connection) -> zbus::Result<impl Iterator<Item = ()>> {
+    let dbus = zbus::blocking::fdo::DBusProxy::new(bus)?;
+    let changes = dbus.receive_name_owner_changed_with_args(&[(0, NAME)])?;
+    Ok(changes.map(drop))
+}
+
 /// The client's side, for the tray.
 #[zbus::proxy(
     interface = "io.github.FunkyNERD.NerdDeck1",

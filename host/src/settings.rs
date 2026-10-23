@@ -21,12 +21,12 @@ use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 use zbus::blocking::Connection;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
-use crate::api::{NerdDeckProxyBlocking, Status};
+use crate::api::{self, NerdDeckProxyBlocking, Status};
 use crate::config::{self, Config, MAX_BUTTONS, MAX_ID_LEN, MAX_LABEL_LEN};
 use crate::firmware::KnownDevices;
 use crate::notifications::{SeenApp, SeenApps};
 use crate::protocol::{DisplayChange, DisplaySettings, TABS};
-use crate::{battery, collector, icons, images, updates};
+use crate::{battery, collector, icons, images, unit, updates};
 
 /// Held while the window is open. Opening it again asks the open one to come
 /// to the front instead (`Present`).
@@ -42,6 +42,9 @@ const DISPLAY_WAIT: Duration = Duration::from_secs(3);
 /// How long an install may take, from handing the firmware to the service to
 /// the deck saying hello with it.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// How long the service has to start or stop before the window gives up on it.
+const SERVICE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The status is also polled, in case a signal is missed while the service restarts.
 const STATUS_POLL: Duration = Duration::from_secs(3);
@@ -1019,6 +1022,36 @@ fn call(ui: &SettingsWindow, f: impl FnOnce() -> zbus::Result<()> + Send + 'stat
     });
 }
 
+/// Start or stop the service; the button shows `busy` until the service has.
+fn control_service(ui: &SettingsWindow, busy: &'static str, f: fn() -> Result<(), String>) {
+    ui.global::<Backend>().set_service_busy(busy.into());
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let result = f();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            let b = ui.global::<Backend>();
+            match result {
+                Err(e) => {
+                    b.set_service_busy("".into());
+                    problem(&ui, e);
+                }
+                Ok(()) => {
+                    let weak = ui.as_weak();
+                    Timer::single_shot(SERVICE_TIMEOUT, move || {
+                        let Some(ui) = weak.upgrade() else { return };
+                        let b = ui.global::<Backend>();
+                        if b.get_service_busy() == busy {
+                            b.set_service_busy("".into());
+                            let what = if busy == "starting" { "start" } else { "stop" };
+                            problem(&ui, format!("The service didn't {what}; see journalctl --user -u nerd-deck"));
+                        }
+                    });
+                }
+            }
+        });
+    });
+}
+
 /// Ask GitHub what's new in the app's newer releases, and for this system's package.
 fn check_app(ui: &SettingsWindow) {
     let b = ui.global::<Backend>();
@@ -1084,6 +1117,10 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     let b = ui.global::<Backend>();
     let s = status.cloned().unwrap_or_default();
     b.set_service_running(status.is_some());
+    let busy = b.get_service_busy();
+    if (busy == "starting" && status.is_some()) || (busy == "stopping" && status.is_none()) {
+        b.set_service_busy("".into());
+    }
     b.set_connected(s.connected);
     b.set_port(s.port.into());
     b.set_serial(s.serial.into());
@@ -1145,6 +1182,16 @@ fn watch_status(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         thread::spawn(move || {
             if let Ok(signals) = deck.receive_status_changed() {
                 signals.for_each(|_| push(deck.status().ok()));
+            }
+        });
+    }
+    {
+        let (deck, push) = (deck.clone(), push.clone());
+        thread::spawn(move || {
+            let changes = Connection::session().and_then(|bus| api::service_comings_and_goings(&bus));
+            match changes {
+                Ok(changes) => changes.for_each(|_| push(deck.status().ok())),
+                Err(e) => log::warn!("not watching for the service starting and stopping: {e}"),
             }
         });
     }
@@ -1667,6 +1714,14 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
 
     b.on_is_newer(|a, b| updates::is_newer(&a, &b));
 
+    b.on_start_service({
+        let ui = ui.as_weak();
+        move || control_service(&ui.unwrap(), "starting", unit::start)
+    });
+    b.on_stop_service({
+        let ui = ui.as_weak();
+        move || control_service(&ui.unwrap(), "stopping", unit::stop)
+    });
     b.on_open_url(|url| {
         if let Err(e) = Command::new("xdg-open").arg(url.as_str()).spawn() {
             log::warn!("opening {url}: {e}");

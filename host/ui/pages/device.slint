@@ -1,6 +1,7 @@
 import { Slider, ComboBox, SpinBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Backend } from "../backend.slint";
+import { ServiceButton } from "../service-button.slint";
 import { Card, SectionTitle, SettingRow, Toggle, Segmented, Pill } from "../widgets.slint";
 
 // A small drawing of the deck showing its System tab.
@@ -157,11 +158,9 @@ export component DevicePage inherits VerticalLayout {
                         background: Theme.selected;
                     }
                 }
-                if !Backend.service-running: Text {
-                    text: "Start it with: systemctl --user start nerd-deck";
-                    font-size: 13px;
-                    font-family: Theme.mono;
-                    color: Theme.text-dim;
+                if !Backend.service-running: HorizontalLayout {
+                    alignment: start;
+                    ServiceButton { primary: true; }
                 }
                 if Backend.service-running && !Backend.connected && !Backend.flashing: Text {
                     text: "Plug the deck in with a USB-C cable that carries data.";

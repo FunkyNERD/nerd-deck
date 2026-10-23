@@ -70,6 +70,10 @@ export struct KnownDeck {
 export global Backend {
     // From the service over D-Bus.
     in property <bool> service-running;
+    // "starting" or "stopping" until the service has, or "".
+    in property <string> service-busy;
+    callback start-service();
+    callback stop-service();
     in property <bool> connected;
     in property <string> port;
     in property <string> serial;
