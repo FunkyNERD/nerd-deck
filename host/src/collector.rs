@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use sysinfo::{Components, Disks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 use crate::battery;
 use crate::gpu::Gpu;
@@ -20,12 +20,16 @@ const MAX_DISKS: usize = 4;
 /// out within a few seconds.
 const BATTERY_EVERY: Duration = Duration::from_secs(5);
 
+/// How often clock speeds, disk space and the CPU's temperature are read.
+const SLOW_EVERY: Duration = Duration::from_secs(1);
+
 /// Sensor labels to prefer for CPU temperature, in order.
 const CPU_TEMP_LABELS: &[&str] = &["Package id 0", "Tctl", "Tdie", "k10temp", "coretemp", "cpu"];
 
 pub struct Collector {
     sys: System,
-    networks: Networks,
+    /// Bytes received and sent so far, by interface, from the last sample.
+    net_io: HashMap<String, (u64, u64)>,
     disks: Disks,
     components: Components,
     interface: Option<String>,
@@ -43,6 +47,8 @@ pub struct Collector {
     /// None on PCs without a readable GPU, which get the busiest process instead.
     gpu: Option<Gpu>,
     power_profile: PowerProfile,
+    /// When the SLOW_EVERY readings were last taken.
+    slow_read: Option<Instant>,
     /// The last battery reading and when it was taken.
     battery_read: Option<(Instant, Option<crate::protocol::BatteryStats>)>,
 }
@@ -54,7 +60,7 @@ impl Collector {
         sys.refresh_cpu_all();
         Self {
             sys,
-            networks: Networks::new_with_refreshed_list(),
+            net_io: read_net_dev(),
             disks: Disks::new_with_refreshed_list(),
             components: Components::new_with_refreshed_list(),
             interface,
@@ -67,28 +73,48 @@ impl Collector {
             disk_io: read_diskstats(),
             gpu: Gpu::find(),
             power_profile: PowerProfile::new(),
+            slow_read: None,
             battery_read: None,
         }
     }
 
+    /// Applies changed stats settings.
+    pub fn configure(&mut self, interface: Option<String>, mounts: Vec<String>, removable: bool, battery: bool) {
+        self.interface = interface;
+        self.mounts = mounts;
+        self.removable = removable;
+        self.battery = battery;
+        self.battery_read = None;
+    }
+
     pub fn sample(&mut self) -> Stats {
-        self.sys.refresh_cpu_all();
+        self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
-        self.networks.refresh();
+        // What changes slowly is read at most every SLOW_EVERY, however short
+        // the interval: clock speeds (a file per core), disk space, and the
+        // CPU's temperature.
+        let slow = self.slow_read.is_none_or(|at| at.elapsed() >= SLOW_EVERY);
+        if slow {
+            self.slow_read = Some(Instant::now());
+            self.sys.refresh_cpu_frequency();
+            // Only the CPU's sensor: refreshing them all takes ~45 ms on a laptop.
+            if let Some(c) = self.cpu_sensor().and_then(|i| self.components.list_mut().get_mut(i)) {
+                c.refresh();
+            }
+        }
         if self.mounts_changed.swap(false, Ordering::Relaxed) {
             self.disks.refresh_list();
-        } else {
+        } else if slow {
             self.disks.refresh();
-        }
-        // Only the CPU's sensor: refreshing them all takes ~45 ms on a laptop.
-        if let Some(c) = self.cpu_sensor().and_then(|i| self.components.list_mut().get_mut(i)) {
-            c.refresh();
         }
 
         let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
         self.last_sample = Instant::now();
 
         let load = System::load_average();
+        let net_io = read_net_dev();
+        let net = self.net(&net_io, elapsed);
+        self.net_io = net_io;
         let io = read_diskstats();
         let disks = self.disks(&io, elapsed);
         self.disk_io = io;
@@ -106,7 +132,7 @@ impl Collector {
                 swap_used: self.sys.used_swap(),
                 swap_total: self.sys.total_swap(),
             },
-            net: self.net(elapsed),
+            net,
             disks,
             gpu,
             top,
@@ -160,25 +186,25 @@ impl Collector {
         Some(self.components.iter().nth(i)?.temperature()).filter(|t| t.is_finite())
     }
 
-    fn net(&self, elapsed: f64) -> NetStats {
+    /// The configured interface, else the busiest one but loopback, with its
+    /// rates since the last sample. One that's new since then starts at zero.
+    fn net(&self, now: &HashMap<String, (u64, u64)>, elapsed: f64) -> NetStats {
         let chosen = match &self.interface {
-            Some(name) => self.networks.iter().find(|(n, _)| *n == name),
-            None => self
-                .networks
-                .iter()
-                .filter(|(n, _)| n.as_str() != "lo")
-                .max_by_key(|(_, d)| d.total_received() + d.total_transmitted()),
+            Some(name) => now.get_key_value(name),
+            None => now.iter().filter(|(n, _)| n.as_str() != "lo").max_by_key(|(_, (rx, tx))| rx + tx),
         };
-
-        match chosen {
-            Some((name, data)) => NetStats {
-                iface: name.clone(),
-                // received()/transmitted() are deltas since the previous refresh.
-                rx_bps: (data.received() as f64 / elapsed) as u64,
-                tx_bps: (data.transmitted() as f64 / elapsed) as u64,
-            },
-            None => NetStats::default(),
-        }
+        let Some((name, &(rx, tx))) = chosen else {
+            return NetStats::default();
+        };
+        let (rx_bps, tx_bps) = self
+            .net_io
+            .get(name)
+            .map(|&(rx0, tx0)| {
+                let rate = |n: u64, b: u64| (n.saturating_sub(b) as f64 / elapsed) as u64;
+                (rate(rx, rx0), rate(tx, tx0))
+            })
+            .unwrap_or((0, 0));
+        NetStats { iface: name.clone(), rx_bps, tx_bps }
     }
 
     /// The program using the most CPU, its processes counted together.
@@ -293,6 +319,27 @@ fn is_automount(mount: &Path) -> bool {
     AUTOMOUNT_DIRS.iter().any(|dir| mount.starts_with(dir) && mount != Path::new(dir))
 }
 
+/// Bytes received and sent so far by every interface, from /proc/net/dev:
+/// one file for them all, where sysinfo opens six per interface.
+fn read_net_dev() -> HashMap<String, (u64, u64)> {
+    std::fs::read_to_string("/proc/net/dev").map(|t| parse_net_dev(&t)).unwrap_or_default()
+}
+
+/// "  name: rx_bytes rx_packets ... (8 receive fields) tx_bytes ...", after
+/// two header lines.
+fn parse_net_dev(text: &str) -> HashMap<String, (u64, u64)> {
+    text.lines()
+        .skip(2)
+        .filter_map(|line| {
+            let (name, counters) = line.split_once(':')?;
+            let mut fields = counters.split_whitespace().map(|f| f.parse::<u64>().ok());
+            let rx = fields.next()??;
+            let tx = fields.nth(7)??;
+            Some((name.trim().to_owned(), (rx, tx)))
+        })
+        .collect()
+}
+
 /// Sectors read and written so far, by block device ("nvme0n1p2", "dm-0").
 fn read_diskstats() -> HashMap<String, (u64, u64)> {
     parse_diskstats(&std::fs::read_to_string("/proc/diskstats").unwrap_or_default())
@@ -326,6 +373,16 @@ fn own_program() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_proc_net_dev() {
+        let text = "Inter-|   Receive |  Transmit\n face |bytes packets|bytes packets\n\
+            \x20   lo:  173038    1812    0    0    0     0          0         0   173038    1812    0    0    0     0       0          0\n\
+            wlp0s20f3: 19752565   31202    0    2    0     0          0         0   731179    2520    0    6    0     0       0          0\n";
+        let io = parse_net_dev(text);
+        assert_eq!(io["lo"], (173038, 173038));
+        assert_eq!(io["wlp0s20f3"], (19752565, 731179));
+    }
 
     #[test]
     fn reads_diskstats() {

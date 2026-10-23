@@ -266,7 +266,14 @@ impl Host {
         let cfg = Config::load(self.config_path.as_deref())?;
         let device_changed = cfg.device != self.cfg.device;
         if cfg.stats != self.cfg.stats {
-            self.collector = new_collector(&cfg);
+            // In place: a new collector would start another GPU and mount
+            // watcher, and the old ones never stop.
+            self.collector.configure(
+                cfg.stats.interface.clone(),
+                cfg.stats.mounts.clone(),
+                cfg.stats.removable,
+                cfg.stats.battery,
+            );
         }
         if cfg.updates.firmware != self.cfg.updates.firmware {
             self.flashing = firmware::Flashing::new(&cfg);
