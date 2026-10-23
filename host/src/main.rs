@@ -395,6 +395,8 @@ impl Host {
             if Instant::now() >= next_stats {
                 conn.send(&HostMsg::Stats(self.collector.sample()))?;
                 next_stats += Duration::from_millis(self.cfg.stats.interval_ms);
+                // A slow sample mustn't leave a backlog to send in a burst.
+                next_stats = next_stats.max(Instant::now());
             }
 
             match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {

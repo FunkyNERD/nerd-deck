@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sysinfo::{Components, Disks, Networks, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
@@ -14,6 +14,11 @@ use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats, TopProcess
 
 /// The device shows at most this many disks.
 const MAX_DISKS: usize = 4;
+
+/// How long a battery reading is reused. Reading it takes ~10 ms (the
+/// embedded controller is slow); this still shows the charger going in or
+/// out within a few seconds.
+const BATTERY_EVERY: Duration = Duration::from_secs(5);
 
 /// Sensor labels to prefer for CPU temperature, in order.
 const CPU_TEMP_LABELS: &[&str] = &["Package id 0", "Tctl", "Tdie", "k10temp", "coretemp", "cpu"];
@@ -38,6 +43,8 @@ pub struct Collector {
     /// None on PCs without a readable GPU, which get the busiest process instead.
     gpu: Option<Gpu>,
     power_profile: PowerProfile,
+    /// The last battery reading and when it was taken.
+    battery_read: Option<(Instant, Option<crate::protocol::BatteryStats>)>,
 }
 
 impl Collector {
@@ -60,6 +67,7 @@ impl Collector {
             disk_io: read_diskstats(),
             gpu: Gpu::find(),
             power_profile: PowerProfile::new(),
+            battery_read: None,
         }
     }
 
@@ -72,7 +80,10 @@ impl Collector {
         } else {
             self.disks.refresh();
         }
-        self.components.refresh();
+        // Only the CPU's sensor: refreshing them all takes ~45 ms on a laptop.
+        if let Some(c) = self.cpu_sensor().and_then(|i| self.components.list_mut().get_mut(i)) {
+            c.refresh();
+        }
 
         let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
         self.last_sample = Instant::now();
@@ -99,14 +110,24 @@ impl Collector {
             disks,
             gpu,
             top,
-            battery: if self.battery { self.battery() } else { None },
+            battery: if self.battery { self.cached_battery() } else { None },
         }
+    }
+
+    /// The battery, read at most every BATTERY_EVERY.
+    fn cached_battery(&mut self) -> Option<crate::protocol::BatteryStats> {
+        if self.battery_read.as_ref().is_none_or(|(at, _)| at.elapsed() >= BATTERY_EVERY) {
+            let b = self.battery();
+            self.battery_read = Some((Instant::now(), b));
+        }
+        self.battery_read.as_ref().and_then(|(_, b)| b.clone())
     }
 
     fn battery(&mut self) -> Option<crate::protocol::BatteryStats> {
         let mut b = battery::read()?;
         let watts = b.watts.unwrap_or(0.0);
-        // Start over when charging starts or stops.
+        // Readings are BATTERY_EVERY apart, so this follows a change in about
+        // a minute. Start over when charging starts or stops.
         let smoothed = match self.battery_watts {
             Some((state, avg)) if state == b.state => avg + (watts - avg) * 0.1,
             _ => watts,
@@ -127,14 +148,16 @@ impl Collector {
         }
     }
 
+    /// The sensor for the CPU's temperature, by its index.
+    fn cpu_sensor(&self) -> Option<usize> {
+        CPU_TEMP_LABELS
+            .iter()
+            .find_map(|want| self.components.iter().position(|c| c.label().contains(want)))
+    }
+
     fn cpu_temp(&self) -> Option<f32> {
-        CPU_TEMP_LABELS.iter().find_map(|want| {
-            self.components
-                .iter()
-                .find(|c| c.label().contains(want))
-                .map(|c| c.temperature())
-                .filter(|t| t.is_finite())
-        })
+        let i = self.cpu_sensor()?;
+        Some(self.components.iter().nth(i)?.temperature()).filter(|t| t.is_finite())
     }
 
     fn net(&self, elapsed: f64) -> NetStats {
