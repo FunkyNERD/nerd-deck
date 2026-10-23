@@ -161,7 +161,7 @@ connects. Sent after the device's `hello` and whenever they change. Added in v6.
   firmware ignores it.
 - `stats_ms`: milliseconds between `stats` messages. The device takes the host
   for gone when nothing arrives for this long plus 2 s (at least 3 s), instead
-  of a fixed 3 s. Not kept in flash. Added in firmware 0.8.2, without a
+  of a fixed 3 s. Not kept in flash. Added in firmware 0.9.0, without a
   protocol change; older firmware ignores it.
 
 Fields left out keep the device's stored values.

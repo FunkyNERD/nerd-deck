@@ -58,7 +58,7 @@ pub enum HostMsg {
         flip: bool,
         /// Milliseconds between stats, so the deck knows how long to wait
         /// for the next before it takes the host for gone. Added in firmware
-        /// 0.8.2; older firmware waits 3 s.
+        /// 0.9.0; older firmware waits 3 s.
         stats_ms: u64,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
