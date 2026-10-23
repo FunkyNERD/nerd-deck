@@ -126,6 +126,8 @@ export global Backend {
     // Stats
     in property <[string]> intervals;
     in-out property <int> interval-index;
+    // Under a second: the deck may respond more slowly.
+    in property <bool> interval-fast;
     in property <[string]> interfaces;
     in-out property <int> interface-index;
     in property <[DiskRow]> disks;

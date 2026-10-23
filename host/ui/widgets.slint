@@ -2,7 +2,7 @@
 // own state: they report a click and the backend sets the new value, so the
 // window always shows what's in the config.
 
-import { Theme } from "theme.slint";
+import { Theme, Glyphs } from "theme.slint";
 
 export component Glyph inherits Text {
     font-family: Theme.icons;
@@ -44,6 +44,8 @@ export component SectionTitle inherits VerticalLayout {
 export component SettingRow inherits Rectangle {
     in property <string> title;
     in property <string> subtitle;
+    // Shown under the subtitle in orange, when set.
+    in property <string> warning;
     in property <bool> last;
     in property <bool> enabled: true;
     min-height: 60px;
@@ -68,6 +70,18 @@ export component SettingRow inherits Rectangle {
                 font-size: 12px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
+            }
+            if root.warning != "": HorizontalLayout {
+                spacing: 6px;
+                padding-top: 2px;
+                Glyph { text: Glyphs.warning; font-size: 11px; color: Theme.orange; }
+                Text {
+                    text: root.warning;
+                    font-size: 12px;
+                    color: Theme.orange;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
             }
         }
         VerticalLayout {

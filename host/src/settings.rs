@@ -42,9 +42,16 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(90);
 /// The status is also polled, in case a signal is missed while the service restarts.
 const STATUS_POLL: Duration = Duration::from_secs(3);
 
-/// The choices offered for `stats.interval_ms`.
-const INTERVALS: [(u64, &str); 4] =
-    [(500, "Half a second"), (1000, "1 second"), (2000, "2 seconds"), (5000, "5 seconds")];
+/// The choices offered for `stats.interval_ms`. Down to config::MIN_INTERVAL_MS;
+/// under a second the window warns the deck may respond more slowly.
+const INTERVALS: [(u64, &str); 6] = [
+    (100, "100 ms"),
+    (200, "200 ms"),
+    (500, "Half a second"),
+    (1000, "1 second"),
+    (2000, "2 seconds"),
+    (5000, "5 seconds"),
+];
 
 /// The device shows at most this many disks.
 const MAX_DISKS: usize = 4;
@@ -625,6 +632,7 @@ impl State {
             }
         };
         b.set_intervals(ModelRc::new(VecModel::from(intervals)));
+        b.set_interval_fast(interval < 1000);
         b.set_interval_index(index as i32);
 
         let networks = sysinfo::Networks::new_with_refreshed_list();
@@ -1314,6 +1322,7 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         let Some((ms, _)) = INTERVALS.get(index as usize) else { return };
         st.set("stats", "interval_ms", *ms as i64);
         st.save(&ui);
+        ui.global::<Backend>().set_interval_fast(*ms < 1000);
     });
     on!(on_set_interface, |ui, st, index| {
         if index == 0 {

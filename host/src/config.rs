@@ -7,6 +7,11 @@ use serde::Deserialize;
 use crate::icons;
 use crate::images;
 
+/// The shortest `stats.interval_ms`. The deck keeps up with faster, but it
+/// spends so much of its time drawing that taps get slow, and CPU usage over
+/// such a short time is noise.
+pub const MIN_INTERVAL_MS: u64 = 100;
+
 // Limits imposed by the firmware (firmware/src/config.hpp, stats.hpp).
 pub const MAX_BUTTONS: usize = 12;
 pub const MAX_ID_LEN: usize = 23;
@@ -268,6 +273,11 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.display.validate()?;
         ensure!(
+            self.stats.interval_ms >= MIN_INTERVAL_MS,
+            "stats.interval_ms is {}; the shortest is {MIN_INTERVAL_MS}",
+            self.stats.interval_ms
+        );
+        ensure!(
             self.buttons.len() <= MAX_BUTTONS,
             "{} buttons configured; the device shows at most {MAX_BUTTONS}",
             self.buttons.len()
@@ -362,6 +372,13 @@ mod tests {
         let cfg: Config = toml::from_str(toml)?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    #[test]
+    fn rejects_too_short_an_interval() {
+        assert!(parse("[stats]\ninterval_ms = 100").is_ok());
+        let err = parse("[stats]\ninterval_ms = 20").unwrap_err();
+        assert!(err.to_string().contains("shortest is 100"));
     }
 
     #[test]
