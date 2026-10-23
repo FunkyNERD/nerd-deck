@@ -16,8 +16,10 @@ constexpr uint32_t kProtoVersion = 6;
 constexpr int kScreenWidth = 480;
 constexpr int kScreenHeight = 320;
 
-// Host is considered gone if nothing arrives for this long.
+// The host is taken for gone when nothing arrives for this long, or for its
+// stats interval (from `display`) plus kHostTimeoutSlackMs if that's longer.
 constexpr uint32_t kHostTimeoutMs = 3000;
+constexpr uint32_t kHostTimeoutSlackMs = 2000;
 
 constexpr size_t kMaxLineLen = 2048;
 // Serial receive buffer: holds a whole button image (~36 KB of lines) if the

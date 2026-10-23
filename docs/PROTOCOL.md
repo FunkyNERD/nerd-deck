@@ -20,7 +20,8 @@ Sent on connect. The device replies with its own `hello`.
 
 ### `stats`
 Sent every `stats.interval_ms` (default 1 s). The device treats the host as gone
-if nothing arrives for 3 s.
+if nothing arrives for that interval plus 2 s (at least 3 s; see `stats_ms` in
+`display`).
 ```json
 {
   "type": "stats",
@@ -138,7 +139,7 @@ showing. The host sends ASCII only, since the device's fonts have nothing else.
 Settings the device keeps in flash, so they apply from power-on, before the host
 connects. Sent after the device's `hello` and whenever they change. Added in v6.
 ```json
-{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false}
+{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false,"stats_ms":1000}
 ```
 - `tabs`: the tab order, by `system`, `network`, `storage`, `battery` and
   `controls`. The pills in the header and swiping both follow it. Tabs left out
@@ -158,6 +159,10 @@ connects. Sent after the device's `hello` and whenever they change. Added in v6.
 - `flip`: turn the picture and touch upside down, for the USB cable on the
   other side. Added in firmware 0.7.0, without a protocol change; older
   firmware ignores it.
+- `stats_ms`: milliseconds between `stats` messages. The device takes the host
+  for gone when nothing arrives for this long plus 2 s (at least 3 s), instead
+  of a fixed 3 s. Not kept in flash. Added in firmware 0.8.2, without a
+  protocol change; older firmware ignores it.
 
 Fields left out keep the device's stored values.
 

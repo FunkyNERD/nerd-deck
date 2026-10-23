@@ -56,6 +56,10 @@ pub enum HostMsg {
         /// Upside down, for the USB cable on the other side. Added in
         /// firmware 0.7.0; older firmware ignores it.
         flip: bool,
+        /// Milliseconds between stats, so the deck knows how long to wait
+        /// for the next before it takes the host for gone. Added in firmware
+        /// 0.8.2; older firmware waits 3 s.
+        stats_ms: u64,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.

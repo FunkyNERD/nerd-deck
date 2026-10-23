@@ -532,6 +532,7 @@ fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
         temp_warm: d.temp_warm,
         temp_hot: d.temp_hot,
         flip: d.flip,
+        stats_ms: cfg.stats.interval_ms,
     })
 }
 

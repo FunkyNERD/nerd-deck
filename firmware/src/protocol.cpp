@@ -23,6 +23,7 @@ bool overflow = false;
 
 bool everReceived = false;
 uint32_t lastRxMs = 0;
+uint32_t hostTimeoutMs = kHostTimeoutMs;
 
 void send(const JsonDocument& doc) {
     serializeJson(doc, Serial);
@@ -197,6 +198,9 @@ void handleDisplay(JsonObjectConst o) {
         d.tempHot = static_cast<uint8_t>(hot);
     }
     if (o["flip"].is<bool>()) d.flip = o["flip"].as<bool>();
+    // Not kept: it comes with every connection.
+    if (o["stats_ms"].is<uint32_t>())
+        hostTimeoutMs = max(kHostTimeoutMs, o["stats_ms"].as<uint32_t>() + kHostTimeoutSlackMs);
     save(d);
     ui::applyDisplay(d);
 }
@@ -255,7 +259,7 @@ void poll() {
     }
 }
 
-bool isConnected() { return everReceived && millis() - lastRxMs < kHostTimeoutMs; }
+bool isConnected() { return everReceived && millis() - lastRxMs < hostTimeoutMs; }
 
 void sendHello() {
     JsonDocument doc;
