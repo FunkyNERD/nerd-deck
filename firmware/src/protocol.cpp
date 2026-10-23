@@ -24,6 +24,9 @@ bool overflow = false;
 bool everReceived = false;
 uint32_t lastRxMs = 0;
 uint32_t hostTimeoutMs = kHostTimeoutMs;
+// The newest whole stats this poll, drawn at its end.
+JsonDocument latestStats;
+bool statsPending = false;
 
 void send(const JsonDocument& doc) {
     serializeJson(doc, Serial);
@@ -241,21 +244,57 @@ void init() {
     sendHello();
 }
 
+// A whole line has arrived. Stats are only kept: when they come faster than
+// the UI can draw them, only the newest one each poll is worth drawing.
+void lineDone(const char* line, size_t len) {
+    // A line that starts like a message shows the host is there, even when a
+    // flood has broken the rest of it.
+    static constexpr char kMessage[] = "{\"type\":\"";
+    if (len >= sizeof kMessage - 1 && memcmp(line, kMessage, sizeof kMessage - 1) == 0) {
+        everReceived = true;
+        lastRxMs = millis();
+    }
+    static constexpr char kStats[] = "{\"type\":\"stats\"";
+    if (len >= sizeof kStats - 1 && memcmp(line, kStats, sizeof kStats - 1) == 0) {
+        // A flood loses bytes (the USB driver drops what its queue can't
+        // hold), so keep only stats that are whole.
+        JsonDocument doc;
+        if (deserializeJson(doc, line, len)) return;
+        latestStats = std::move(doc);
+        statsPending = true;
+        return;
+    }
+    handleLine(line, len);
+}
+
 void poll() {
-    while (Serial.available() > 0) {
-        const int c = Serial.read();
-        if (c < 0) break;
-        if (c == '\n') {
-            if (!overflow && lineLen > 0) handleLine(lineBuf, lineLen);
-            lineLen = 0;
-            overflow = false;
-        } else if (c == '\r') {
-            continue;
-        } else if (lineLen < kMaxLineLen) {
-            lineBuf[lineLen++] = static_cast<char>(c);
-        } else {
-            overflow = true;
+    // Read in chunks, which is far quicker than a byte at a time, and for at
+    // most kPollBudgetMs, so the UI still gets its turn while data keeps coming.
+    const uint32_t started = millis();
+    uint8_t chunk[256];
+    while (millis() - started < kPollBudgetMs) {
+        const int ready = Serial.available();
+        if (ready <= 0) break;
+        const size_t n = Serial.read(chunk, min(static_cast<size_t>(ready), sizeof chunk));
+        if (n == 0) break;
+        for (size_t i = 0; i < n; i++) {
+            const char c = static_cast<char>(chunk[i]);
+            if (c == '\n') {
+                if (!overflow && lineLen > 0) lineDone(lineBuf, lineLen);
+                lineLen = 0;
+                overflow = false;
+            } else if (c == '\r') {
+                continue;
+            } else if (lineLen < kMaxLineLen) {
+                lineBuf[lineLen++] = c;
+            } else {
+                overflow = true;
+            }
         }
+    }
+    if (statsPending) {
+        statsPending = false;
+        handleStats(latestStats.as<JsonObjectConst>());
     }
 }
 

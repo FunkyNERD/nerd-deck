@@ -22,6 +22,9 @@ constexpr uint32_t kHostTimeoutMs = 3000;
 constexpr uint32_t kHostTimeoutSlackMs = 2000;
 
 constexpr size_t kMaxLineLen = 2048;
+// Longest one protocol::poll() reads before the UI gets a turn, so a host (or
+// anything else) sending flat out can't freeze the screen.
+constexpr uint32_t kPollBudgetMs = 20;
 // Serial receive buffer: holds a whole button image (~36 KB of lines) if the
 // UI stalls while it arrives; the host waits for each image to land.
 constexpr size_t kSerialRxBuffer = 40 * 1024;
