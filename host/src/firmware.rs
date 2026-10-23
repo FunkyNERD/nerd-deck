@@ -236,14 +236,12 @@ pub fn flash(fw: &Image, port: &str, info: UsbPortInfo) -> Result<()> {
     );
     let mut flasher = Flasher::connect(conn, true, true, false, Some(chip), None)
         .context("entering the ROM bootloader")?;
+    let segments: Vec<Segment> = keeping_nvs(&fw.data)
+        .into_iter()
+        .map(|(addr, data)| Segment { addr, data: Cow::Borrowed(data) })
+        .collect();
     flasher
-        .write_bins_to_flash(
-            &[Segment {
-                addr: 0,
-                data: Cow::Borrowed(&fw.data),
-            }],
-            &mut Progress::default(),
-        )
+        .write_bins_to_flash(&segments, &mut Progress::default())
         .context("writing flash")?;
     flasher
         .connection()
@@ -256,6 +254,43 @@ pub fn flash(fw: &Image, port: &str, info: UsbPortInfo) -> Result<()> {
         reset_again(port).context("resetting the device")?;
     }
     Ok(())
+}
+
+/// Where the image's partition table is, and how its entries start.
+const PARTITION_TABLE: usize = 0x8000;
+const PARTITION_MAGIC: [u8; 2] = [0xAA, 0x50];
+
+/// The parts of a merged image (written at 0) to write, by flash address:
+/// all of it but its NVS partitions. That's where the deck keeps its
+/// settings, and the image only has blank flash for them.
+fn keeping_nvs(image: &[u8]) -> Vec<(u32, &[u8])> {
+    let mut skip: Vec<(usize, usize)> = image
+        .get(PARTITION_TABLE..)
+        .unwrap_or_default()
+        .chunks_exact(32)
+        .take_while(|e| e[..2] == PARTITION_MAGIC)
+        // Type data, subtype nvs.
+        .filter(|e| e[2] == 1 && e[3] == 2)
+        .map(|e| {
+            let offset = u32::from_le_bytes(e[4..8].try_into().unwrap()) as usize;
+            let size = u32::from_le_bytes(e[8..12].try_into().unwrap()) as usize;
+            (offset, offset + size)
+        })
+        .collect();
+    skip.sort();
+    let mut parts = Vec::new();
+    let mut at = 0;
+    for (start, end) in skip {
+        let (start, end) = (start.min(image.len()), end.min(image.len()));
+        if start > at {
+            parts.push((at as u32, &image[at..start]));
+        }
+        at = at.max(end);
+    }
+    if at < image.len() {
+        parts.push((at as u32, &image[at..]));
+    }
+    parts
 }
 
 fn reset_again(port: &str) -> Result<()> {
@@ -380,6 +415,26 @@ impl KnownDevices {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flashing_keeps_the_settings() {
+        let mut image = vec![0xFF; 0x20000];
+        let entry = |t: u8, sub: u8, offset: u32, size: u32| {
+            let mut e = vec![0xAA, 0x50, t, sub];
+            e.extend(offset.to_le_bytes());
+            e.extend(size.to_le_bytes());
+            e.resize(32, 0);
+            e
+        };
+        let table: Vec<u8> = [entry(1, 2, 0x9000, 0x5000), entry(1, 0, 0xE000, 0x2000), entry(0, 0x10, 0x10000, 0x10000)]
+            .concat();
+        image[PARTITION_TABLE..PARTITION_TABLE + table.len()].copy_from_slice(&table);
+        let parts: Vec<(u32, usize)> = keeping_nvs(&image).iter().map(|(a, d)| (*a, d.len())).collect();
+        assert_eq!(parts, [(0, 0x9000), (0xE000, 0x12000)]);
+
+        // No table: all of it.
+        assert_eq!(keeping_nvs(&[0; 16]).len(), 1);
+    }
 
     const MAC: &str = "48:27:E2:91:0B:2C";
 

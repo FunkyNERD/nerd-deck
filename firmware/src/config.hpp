@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define FW_VERSION "0.9.0"
+#define FW_VERSION "0.10.0"
 // Sent in `hello`, and the name of the build environment in platformio.ini
 // that sets it. The host only installs firmware built for the deck's board.
 #ifndef FW_BOARD

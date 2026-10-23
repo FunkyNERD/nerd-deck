@@ -33,6 +33,27 @@ void send(const JsonDocument& doc) {
     Serial.write('\n');
 }
 
+// The stored settings, as the host's `display` message names them.
+void writeDisplay(JsonObject o, const settings::Display& d) {
+    using namespace settings;
+    JsonArray tabs = o["tabs"].to<JsonArray>();
+    for (uint8_t t : d.tabs) tabs.add(kTabIds[t]);
+    o["start"] = d.start == kStartFirst ? "first" : kTabIds[d.start];
+    o["brightness"] = d.brightness;
+    o["dim_after"] = d.dimAfterS;
+    o["off_after"] = d.offAfterS;
+    o["temp_warm"] = d.tempWarm;
+    o["temp_hot"] = d.tempHot;
+    o["flip"] = d.flip;
+}
+
+void sendDisplay(const settings::Display& d) {
+    JsonDocument doc;
+    doc["type"] = "display";
+    writeDisplay(doc.as<JsonObject>(), d);
+    send(doc);
+}
+
 void handleStats(JsonObjectConst o) {
     static HostStats s;
     s = {};
@@ -171,7 +192,7 @@ void handleNotification(JsonObjectConst o) {
 }
 
 // Missing or unknown fields keep the stored values; tabs left out of `tabs`
-// follow in their default order.
+// follow in their default order. Replies with what's now stored.
 void handleDisplay(JsonObjectConst o) {
     using namespace settings;
     Display d = load();
@@ -206,6 +227,7 @@ void handleDisplay(JsonObjectConst o) {
         hostTimeoutMs = max(kHostTimeoutMs, o["stats_ms"].as<uint32_t>() + kHostTimeoutSlackMs);
     save(d);
     ui::applyDisplay(d);
+    sendDisplay(d);
 }
 
 void handleLine(const char* line, size_t len) {
@@ -311,6 +333,8 @@ void sendHello() {
     JsonArray tile = doc["tile"].to<JsonArray>();
     tile.add(w);
     tile.add(h);
+    // This deck's own settings: the host shows and edits them, never overwrites them.
+    writeDisplay(doc["display"].to<JsonObject>(), settings::load());
     send(doc);
 }
 

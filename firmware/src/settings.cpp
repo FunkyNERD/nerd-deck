@@ -67,7 +67,7 @@ void save(const Display& d) {
     now.layout = kLayout;
     now.d = d;
     Stored old{};
-    // Flash wears; the host sends these on every connect.
+    // Flash wears, and the host sends a display message on every connect.
     if (prefs.getBytes(kKey, &old, sizeof old) != sizeof old || memcmp(&old, &now, sizeof now) != 0)
         prefs.putBytes(kKey, &now, sizeof now);
     prefs.end();

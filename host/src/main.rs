@@ -29,7 +29,7 @@ use api::Command;
 use collector::Collector;
 use config::Config;
 use device::Connection;
-use protocol::{ButtonDef, DeviceMsg, HostMsg, PROTO_VERSION};
+use protocol::{ButtonDef, DeviceMsg, DisplayChange, DisplaySettings, HostMsg, PROTO_VERSION};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// The device says hello on boot and in reply to ours, well within this.
@@ -248,7 +248,9 @@ impl Host {
                 Command::Reload(reply) => {
                     let _ = reply.send(self.reload().map(drop).map_err(|e| format!("{e:#}")));
                 }
-                Command::TestNotification { reply, .. } | Command::InstallFirmware { reply, .. } => {
+                Command::TestNotification { reply, .. }
+                | Command::InstallFirmware { reply, .. }
+                | Command::SetDisplay { reply, .. } => {
                     let _ = reply.send(Err("the deck isn't connected".into()));
                 }
             }
@@ -315,6 +317,8 @@ impl Host {
         // The deck's firmware version and board, once it says hello.
         let mut deck_fw = String::new();
         let mut deck_board = String::new();
+        // The deck's own settings, once it reports them (firmware 0.10.0).
+        let mut deck_display: Option<DisplaySettings> = None;
 
         loop {
             let available = self.publish_update();
@@ -343,7 +347,7 @@ impl Host {
                             if device_changed {
                                 return Ok(SessionEnd::Reconnect);
                             }
-                            send_display(&self.cfg, &mut conn)?;
+                            send_stats_ms(&self.cfg, &mut conn)?;
                             send_buttons(&self.cfg, &mut conn, tile)?;
                         }
                         Err(e) => {
@@ -354,6 +358,14 @@ impl Host {
                         let sent = conn.send(&test_notification(critical));
                         let _ = reply.send(sent.as_ref().map_err(|e| e.to_string()).copied());
                         sent?;
+                    }
+                    Command::SetDisplay { change, reply } => {
+                        let checked = set_display(deck_display.as_ref(), &change);
+                        let _ = reply.send(checked.as_ref().map(drop).map_err(|e| format!("{e:#}")));
+                        if let Ok(change) = checked {
+                            // The deck answers with what it now keeps.
+                            conn.send(&HostMsg::Display { change, stats_ms: None })?;
+                        }
                     }
                     Command::InstallFirmware { path, reply } => {
                         let fw = firmware::Image::load(path.as_ref()).map_err(|e| format!("{e:#}")).and_then(|fw| {
@@ -408,9 +420,14 @@ impl Host {
 
             match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
                 Ok(msg) => {
-                    if let DeviceMsg::Hello { fw, board, proto, tile: t } = &msg {
+                    if let DeviceMsg::Display(d) = &msg {
+                        deck_display = Some(d.clone());
+                        self.api.update(|s| s.display = serde_json::to_string(d).ok());
+                    }
+                    if let DeviceMsg::Hello { fw, board, proto, tile: t, display } = &msg {
                         said_hello = true;
                         tile = *t;
+                        deck_display = display.clone();
                         deck_fw = fw.clone();
                         deck_board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
                         if let Some(boards) = &self.firmware_boards {
@@ -424,6 +441,7 @@ impl Host {
                             s.firmware = fw.clone();
                             s.proto = *proto;
                             s.board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
+                            s.display = display.as_ref().and_then(|d| serde_json::to_string(d).ok());
                         });
                         let update = self.flashing.should_update(&port, fw, board.as_deref());
                         if let Some(fw) = update.and_then(load_firmware) {
@@ -456,6 +474,7 @@ fn disconnected(s: &mut api::Status) {
     s.firmware.clear();
     s.board.clear();
     s.proto = 0;
+    s.display = None;
 }
 
 fn notification(n: notifications::Notification) -> HostMsg {
@@ -503,8 +522,9 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
             if proto != PROTO_VERSION {
                 log::warn!("protocol mismatch: host v{PROTO_VERSION}, device v{proto}");
             }
-            // Device may have rebooted; resend its settings and layout.
-            send_display(cfg, conn)?;
+            // Device may have rebooted; resend the layout. Its settings are
+            // its own, so only how often stats come.
+            send_stats_ms(cfg, conn)?;
             send_buttons(cfg, conn, tile)?;
         }
         DeviceMsg::Press { id } => {
@@ -525,24 +545,27 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
         }
         // The reader routes these to the image sender.
         DeviceMsg::Image { .. } => {}
+        DeviceMsg::Display(_) => {}
         DeviceMsg::Unknown => log::debug!("ignoring unknown device message"),
     }
     Ok(())
 }
 
-fn send_display(cfg: &Config, conn: &mut Connection) -> Result<()> {
-    let d = &cfg.display;
-    conn.send(&HostMsg::Display {
-        tabs: d.tab_order(),
-        start: d.start.clone(),
-        brightness: d.brightness,
-        dim_after: d.dim_after * 60,
-        off_after: d.off_after * 60,
-        temp_warm: d.temp_warm,
-        temp_hot: d.temp_hot,
-        flip: d.flip,
-        stats_ms: cfg.stats.interval_ms,
-    })
+fn send_stats_ms(cfg: &Config, conn: &mut Connection) -> Result<()> {
+    conn.send(&HostMsg::Display { change: DisplayChange::default(), stats_ms: Some(cfg.stats.interval_ms) })
+}
+
+/// Checks a change to the deck's settings, given as JSON, against what the
+/// deck reported.
+fn set_display(deck: Option<&DisplaySettings>, change: &str) -> Result<DisplayChange> {
+    let Some(deck) = deck else {
+        bail!("the deck's firmware is too old to change its settings from here; update it first");
+    };
+    let change: DisplayChange = serde_json::from_str(change)?;
+    let mut after = deck.clone();
+    after.apply(&change);
+    after.validate()?;
+    Ok(change)
 }
 
 /// Sends the layout, then each button's image: filling a `tile` (width,

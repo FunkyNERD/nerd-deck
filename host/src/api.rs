@@ -51,6 +51,9 @@ pub struct Status {
     pub update: String,
     /// The config file the service reads.
     pub config: String,
+    /// The connected deck's own settings (protocol::DisplaySettings) as JSON;
+    /// None without a deck, or when its firmware is too old to report them.
+    pub display: Option<String>,
 }
 
 pub type Reply = Sender<Result<(), String>>;
@@ -64,6 +67,8 @@ pub enum Command {
     /// Install the firmware image at this path on the deck, if it's newer than
     /// what the deck runs.
     InstallFirmware { path: String, reply: Reply },
+    /// Change the connected deck's settings: a protocol::DisplayChange as JSON.
+    SetDisplay { change: String, reply: Reply },
 }
 
 /// The service's side: holds the status and tells clients when it changes.
@@ -147,6 +152,12 @@ impl Api {
         self.call(|reply| Command::InstallFirmware { path, reply })
     }
 
+    /// Changes the connected deck's own settings, given as JSON with only the
+    /// fields to change; `Status.display` follows once the deck has them.
+    fn set_display(&self, change: String) -> fdo::Result<()> {
+        self.call(|reply| Command::SetDisplay { change, reply })
+    }
+
     /// Emitted when anything in `Status` changes.
     #[zbus(signal)]
     async fn status_changed(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
@@ -163,6 +174,7 @@ pub trait NerdDeck {
     fn reload(&self) -> zbus::Result<()>;
     fn test_notification(&self, critical: bool) -> zbus::Result<()>;
     fn install_firmware(&self, path: &str) -> zbus::Result<()>;
+    fn set_display(&self, change: &str) -> zbus::Result<()>;
     #[zbus(signal)]
     fn status_changed(&self) -> zbus::Result<()>;
 }

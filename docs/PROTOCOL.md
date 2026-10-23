@@ -137,7 +137,11 @@ showing. The host sends ASCII only, since the device's fonts have nothing else.
 
 ### `display`
 Settings the device keeps in flash, so they apply from power-on, before the host
-connects. Sent after the device's `hello` and whenever they change. Added in v6.
+connects. Added in v6. Each device keeps its own: from firmware 0.10.0 it reports
+them in its `hello`, and the host sends only the fields someone changes (in the
+settings window), plus `stats_ms` after each `hello` and config reload. Before,
+the host sent them all from its config after every `hello`. The device answers
+with its own `display`.
 ```json
 {"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false,"stats_ms":1000}
 ```
@@ -166,6 +170,9 @@ connects. Sent after the device's `hello` and whenever they change. Added in v6.
 
 Fields left out keep the device's stored values.
 
+The host installs firmware around the image's NVS partition, where these are
+kept, so they survive an update.
+
 ## Device → host
 
 ### `hello`
@@ -175,7 +182,19 @@ on a matching board. Firmware before v3 doesn't send it, and only ever ran on
 `wt32-sc01-plus`. `tile` (v5) is a Controls button's face in pixels, inside its
 border: the size button images are made to fill.
 ```json
-{"type":"hello","fw":"0.5.0","proto":5,"board":"wt32-sc01-plus","tile":[108,81]}
+{"type":"hello","fw":"0.10.0","proto":6,"board":"wt32-sc01-plus","tile":[108,81],
+ "display":{"tabs":["system","network","storage","battery","controls"],"start":"first",
+            "brightness":80,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}}
+```
+`display` holds the settings the device keeps, with every field of the host's
+`display` message but `stats_ms`. Added in firmware 0.10.0, without a protocol
+change; the host only lets someone change them on a device that reports them.
+
+### `display`
+The device's settings after a host `display` message, the same as `display` in
+its `hello`. Added in firmware 0.10.0.
+```json
+{"type":"display","tabs":["system","network","storage","battery","controls"],"start":"first","brightness":40,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}
 ```
 
 ### `image`

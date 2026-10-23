@@ -26,7 +26,10 @@ pub const EXAMPLE: &str = include_str!("../config.example.toml");
 pub struct Config {
     pub device: DeviceConfig,
     pub stats: StatsConfig,
-    pub display: DisplayConfig,
+    /// Before 0.10 the deck's settings lived here. Each deck now keeps its
+    /// own, so this is read only so that older configs still load.
+    #[serde(rename = "display")]
+    pub old_display: Option<toml::Table>,
     pub updates: UpdatesConfig,
     pub notifications: NotificationsConfig,
     #[serde(rename = "button")]
@@ -52,90 +55,6 @@ impl Default for DeviceConfig {
             pid: Some(0x1001),
             baud: 115_200,
         }
-    }
-}
-
-/// The deck's tabs, by the names `display.tabs` and `display.start` take, in
-/// their default order.
-pub const TABS: [&str; 5] = ["system", "network", "storage", "battery", "controls"];
-
-/// Settings the deck keeps, so they apply from power-on.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct DisplayConfig {
-    /// Backlight, 5-100 percent.
-    pub brightness: u8,
-    /// The tab the deck opens on: one of TABS, or "first" for the first in `tabs`.
-    pub start: String,
-    /// Tab order. Tabs it leaves out follow, in their default order.
-    pub tabs: Vec<String>,
-    /// Minutes untouched before the screen dims; 0 never dims.
-    pub dim_after: u32,
-    /// Minutes on the waiting screen before the screen turns off; 0 never.
-    pub off_after: u32,
-    /// °C from which the CPU temperature shows orange, and red.
-    pub temp_warm: u8,
-    pub temp_hot: u8,
-    /// Turn the picture upside down, for the USB cable on the other side.
-    pub flip: bool,
-}
-
-impl Default for DisplayConfig {
-    fn default() -> Self {
-        Self {
-            brightness: 80,
-            start: "first".into(),
-            tabs: Vec::new(),
-            dim_after: 0,
-            off_after: 0,
-            temp_warm: 70,
-            temp_hot: 85,
-            flip: false,
-        }
-    }
-}
-
-impl DisplayConfig {
-    /// Every tab, in the configured order.
-    pub fn tab_order(&self) -> Vec<&'static str> {
-        let mut order: Vec<&'static str> =
-            self.tabs.iter().filter_map(|t| TABS.iter().find(|n| **n == t.as_str()).copied()).collect();
-        for t in TABS {
-            if !order.contains(&t) {
-                order.push(t);
-            }
-        }
-        order
-    }
-
-    fn validate(&self) -> Result<()> {
-        ensure!(
-            (5..=100).contains(&self.brightness),
-            "display.brightness must be 5-100, not {}",
-            self.brightness
-        );
-        ensure!(
-            self.start == "first" || TABS.contains(&self.start.as_str()),
-            "display.start {:?} isn't \"first\" or a tab: {}",
-            self.start,
-            TABS.join(", ")
-        );
-        ensure!(
-            (30..=120).contains(&self.temp_warm) && (30..=120).contains(&self.temp_hot),
-            "display.temp_warm and temp_hot must be 30-120 °C"
-        );
-        ensure!(
-            self.temp_warm < self.temp_hot,
-            "display.temp_warm ({}) must be below temp_hot ({})",
-            self.temp_warm,
-            self.temp_hot
-        );
-        let mut seen = std::collections::HashSet::new();
-        for t in &self.tabs {
-            ensure!(TABS.contains(&t.as_str()), "display.tabs: unknown tab {t:?}; the tabs are {}", TABS.join(", "));
-            ensure!(seen.insert(t), "display.tabs lists {t:?} twice");
-        }
-        Ok(())
     }
 }
 
@@ -271,7 +190,6 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        self.display.validate()?;
         ensure!(
             self.stats.interval_ms >= MIN_INTERVAL_MS,
             "stats.interval_ms is {}; the shortest is {MIN_INTERVAL_MS}",
@@ -396,17 +314,9 @@ mod tests {
     }
 
     #[test]
-    fn display_tabs_fill_in_and_validate() {
-        let cfg = parse("[display]\ntabs = ['controls', 'system']").unwrap();
-        assert_eq!(cfg.display.tab_order(), ["controls", "system", "network", "storage", "battery"]);
-        assert_eq!(Config::default().display.tab_order(), TABS);
-        assert!(parse("[display]\ntabs = ['system', 'system']").is_err());
-        assert!(parse("[display]\ntabs = ['nope']").is_err());
-        assert!(parse("[display]\nstart = 'nope'").is_err());
-        assert!(parse("[display]\nstart = 'battery'").is_ok());
-        assert!(parse("[display]\nbrightness = 2").is_err());
-        assert!(parse("[display]\ntemp_warm = 90\ntemp_hot = 80").is_err());
-        assert!(parse("[display]\ntemp_warm = 60\ntemp_hot = 80").is_ok());
+    fn old_display_settings_are_ignored() {
+        let cfg = parse("[display]\nbrightness = 2\nflip = true").unwrap();
+        assert!(cfg.old_display.is_some());
     }
 
     #[test]

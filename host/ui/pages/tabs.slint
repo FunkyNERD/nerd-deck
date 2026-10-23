@@ -117,13 +117,14 @@ export component TabsPage inherits VerticalLayout {
         spacing: 12px;
         SectionTitle {
             title: "Tab order";
-            subtitle: "Use a tab's arrows to move it. The deck updates straight away.";
+            subtitle: Backend.deck-settings ? "Use a tab's arrows to move it. The deck updates straight away." : Backend.deck-settings-note;
             horizontal-stretch: 1;
         }
         VerticalLayout {
             alignment: end;
             PushButton {
                 text: "Reset order";
+                enabled: Backend.deck-settings;
                 clicked => { Backend.reset-tabs(); }
             }
         }
@@ -177,14 +178,14 @@ export component TabsPage inherits VerticalLayout {
                     PushButton {
                         icon: Glyphs.up;
                         flat: true;
-                        enabled: i > 0;
+                        enabled: Backend.deck-settings && i > 0;
                         accessible-label: "Move " + tab.name + " up";
                         clicked => { Backend.move-tab(i, -1); }
                     }
                     PushButton {
                         icon: Glyphs.down;
                         flat: true;
-                        enabled: i + 1 < Backend.tabs.length;
+                        enabled: Backend.deck-settings && i + 1 < Backend.tabs.length;
                         accessible-label: "Move " + tab.name + " down";
                         clicked => { Backend.move-tab(i, 1); }
                     }

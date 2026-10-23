@@ -25,6 +25,7 @@ use crate::api::{NerdDeckProxyBlocking, Status};
 use crate::config::{self, Config, MAX_BUTTONS, MAX_ID_LEN, MAX_LABEL_LEN};
 use crate::firmware::KnownDevices;
 use crate::notifications::{SeenApp, SeenApps};
+use crate::protocol::{DisplayChange, DisplaySettings, TABS};
 use crate::{battery, collector, icons, images, updates};
 
 /// Held while the window is open. Opening it again asks the open one to come
@@ -34,6 +35,9 @@ const SETTINGS_PATH: &str = "/io/github/FunkyNERD/NerdDeck/Settings";
 
 /// Typing is saved once it pauses for this long.
 const SAVE_DELAY: Duration = Duration::from_millis(600);
+/// How long a change sent to the deck may take to come back in the status,
+/// before the window shows what the deck reports instead.
+const DISPLAY_WAIT: Duration = Duration::from_secs(3);
 
 /// How long an install may take, from handing the firmware to the service to
 /// the deck saying hello with it.
@@ -100,9 +104,6 @@ fn tab_info(id: &str) -> (&'static str, &'static str, &'static str) {
     }
 }
 
-/// The deck's protocol version that added the `display` message.
-const DISPLAY_PROTO: i32 = 6;
-
 pub fn run(config_path: Option<PathBuf>, page: Option<&str>) -> Result<()> {
     let bus = Connection::session().context("connecting to the session bus")?;
     match bus.request_name_with_flags(SETTINGS_NAME, RequestNameFlags::DoNotQueue.into()) {
@@ -139,6 +140,7 @@ pub fn run(config_path: Option<PathBuf>, page: Option<&str>) -> Result<()> {
     show_status(&ui, status.as_ref());
     state.borrow_mut().status = status;
     state.borrow().refresh_all(&ui);
+    state.borrow_mut().follow_deck(&ui);
     connect(&ui, &state);
     watch_status(&ui, &state);
     bus.object_server().at(SETTINGS_PATH, Presenter { ui: ui.as_weak() })?;
@@ -313,6 +315,15 @@ struct State {
     save_timer: Timer,
     /// Edits waiting for the save timer.
     dirty: bool,
+    /// The connected deck's own settings, with the edits made here; None
+    /// when there's no deck whose settings can be changed.
+    display: Option<DisplaySettings>,
+    /// Edits for the deck, waiting for `display_timer`.
+    display_pending: DisplayChange,
+    display_timer: Timer,
+    /// What the deck should report once it has the last change sent, and
+    /// until when to wait for that.
+    display_expected: Option<(DisplaySettings, Instant)>,
 }
 
 impl State {
@@ -359,6 +370,10 @@ impl State {
             deck,
             save_timer: Timer::default(),
             dirty: false,
+            display: None,
+            display_pending: DisplayChange::default(),
+            display_timer: Timer::default(),
+            display_expected: None,
         })
     }
 
@@ -542,23 +557,36 @@ impl State {
 
     fn refresh_display(&self, ui: &SettingsWindow) {
         let b = ui.global::<Backend>();
-        let d = &self.cfg.display;
+        let status = self.status.as_ref();
+        b.set_deck_settings(self.display.is_some());
+        b.set_deck_settings_note(
+            match status {
+                _ if self.display.is_some() => "Kept on this deck, so they survive a reboot. Each deck has its own.",
+                None => "Start the service to change these.",
+                Some(s) if !s.connected => "Connect a deck to see and change its settings. Each deck keeps its own.",
+                Some(s) if s.firmware.is_empty() => "Waiting for the deck to say hello.",
+                Some(_) => "This deck's firmware is too old to change these from here. Update it on the Firmware page.",
+            }
+            .into(),
+        );
+        // Without a deck, the defaults, greyed out.
+        let d = self.display.clone().unwrap_or_default();
         let order = d.tab_order();
         b.set_brightness(d.brightness.into());
 
         let first = tab_info(order[0]).0;
         let starts: Vec<SharedString> = std::iter::once(format!("First tab ({first})"))
-            .chain(config::TABS.iter().map(|t| tab_info(t).0.to_owned()))
+            .chain(TABS.iter().map(|t| tab_info(t).0.to_owned()))
             .map(Into::into)
             .collect();
         b.set_start_options(ModelRc::new(VecModel::from(starts)));
-        let start = config::TABS.iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
+        let start = TABS.iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
         b.set_start_index(start as i32);
 
-        let (dims, index) = minutes_choices(&DIM_AFTER, d.dim_after);
+        let (dims, index) = minutes_choices(&DIM_AFTER, d.dim_after / 60);
         b.set_dim_options(ModelRc::new(VecModel::from(dims)));
         b.set_dim_index(index);
-        let (offs, index) = minutes_choices(&OFF_AFTER, d.off_after);
+        let (offs, index) = minutes_choices(&OFF_AFTER, d.off_after / 60);
         b.set_off_options(ModelRc::new(VecModel::from(offs)));
         b.set_off_index(index);
         b.set_temp_warm(d.temp_warm.into());
@@ -587,6 +615,47 @@ impl State {
             })
             .collect();
         b.set_tabs(ModelRc::new(VecModel::from(rows)));
+    }
+
+    /// Follow the deck's settings in the status, except while edits made here
+    /// are on their way to it.
+    fn follow_deck(&mut self, ui: &SettingsWindow) {
+        let reported: Option<DisplaySettings> = self
+            .status
+            .as_ref()
+            .and_then(|s| s.display.as_deref())
+            .and_then(|json| serde_json::from_str(json).ok());
+        match reported {
+            None => {
+                self.display = None;
+                self.display_pending = DisplayChange::default();
+                self.display_timer.stop();
+                self.display_expected = None;
+            }
+            Some(r) => {
+                let waiting =
+                    self.display_expected.as_ref().is_some_and(|(want, until)| *want != r && Instant::now() < *until);
+                if !waiting && self.display_pending.is_empty() {
+                    self.display_expected = None;
+                    self.display = Some(r);
+                }
+            }
+        }
+        self.refresh_display(ui);
+    }
+
+    /// Send the edits waiting for the deck.
+    fn send_display(&mut self, ui: &SettingsWindow) {
+        self.display_timer.stop();
+        let change = std::mem::take(&mut self.display_pending);
+        let Some(d) = &self.display else { return };
+        if change.is_empty() || self.status.is_none() {
+            return;
+        }
+        self.display_expected = Some((d.clone(), Instant::now() + DISPLAY_WAIT));
+        let Ok(json) = serde_json::to_string(&change) else { return };
+        let deck = self.deck.clone();
+        call(ui, move || deck.set_display(&json));
     }
 
     // ---- Notifications ----
@@ -909,6 +978,25 @@ fn or_dash(s: &str) -> &str {
     }
 }
 
+/// Make a change to the deck's settings here, and send it to the deck: now,
+/// or once changes stop coming for a moment when `later`.
+fn edit_display(ui: &SettingsWindow, state: &Rc<RefCell<State>>, change: DisplayChange, later: bool) {
+    let mut st = state.borrow_mut();
+    let Some(d) = st.display.as_mut() else { return };
+    d.apply(&change);
+    st.display_pending.merge(change);
+    if !later {
+        st.refresh_display(ui);
+        return st.send_display(ui);
+    }
+    let (ui, state) = (ui.as_weak(), Rc::downgrade(state));
+    st.display_timer.start(TimerMode::SingleShot, SAVE_DELAY, move || {
+        if let (Some(ui), Some(state)) = (ui.upgrade(), state.upgrade()) {
+            state.borrow_mut().send_display(&ui);
+        }
+    });
+}
+
 fn problem(ui: &SettingsWindow, text: String) {
     log::warn!("{text}");
     ui.global::<Backend>().set_problem(text.into());
@@ -1025,7 +1113,6 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     if !s.board.is_empty() && b.get_fw_board() != s.board.as_str() && b.get_check_updates() {
         check_firmware(ui);
     }
-    b.set_display_unsupported(s.connected && (s.proto as i32) < DISPLAY_PROTO);
 }
 
 /// Follow the service's status: its signal, plus a slow poll.
@@ -1041,6 +1128,7 @@ fn watch_status(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
                         if state.status != status {
                             show_status(&ui, status.as_ref());
                             state.status = status;
+                            state.follow_deck(&ui);
                             state.refresh_known(&ui);
                             ui.global::<Backend>().set_sysinfo(state.sysinfo().into());
                         }
@@ -1362,70 +1450,69 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
     });
 
     // ---- Display ----
-    {
-        let ui_weak = ui.as_weak();
-        let state = state.clone();
-        b.on_set_brightness(move |percent| {
-            let Some(ui) = ui_weak.upgrade() else { return };
-            let mut st = state.borrow_mut();
-            let percent = percent.clamp(5, 100);
-            st.set("display", "brightness", percent as i64);
-            ui.global::<Backend>().set_brightness(percent);
-            // The slider sends a value per step; save once it settles.
-            st.save_later(&ui, &state);
-        });
-    }
-    on!(on_set_start, |ui, st, index| {
-        let start = if index <= 0 { "first" } else { config::TABS.get(index as usize - 1).copied().unwrap_or("first") };
-        st.set("display", "start", start);
-        st.save(&ui);
-        st.refresh_display(&ui);
-    });
-    on!(on_set_dim, |ui, st, index| {
-        let Some((minutes, _)) = DIM_AFTER.get(index as usize) else { return };
-        st.set("display", "dim_after", *minutes as i64);
-        st.save(&ui);
-    });
-    on!(on_set_off, |ui, st, index| {
-        let Some((minutes, _)) = OFF_AFTER.get(index as usize) else { return };
-        st.set("display", "off_after", *minutes as i64);
-        st.save(&ui);
-    });
-    {
-        // Each click of a number box sends one; save once they settle.
-        let set_temp = |key: &'static str| {
+    // The connected deck's own settings: each handler gives a change, sent
+    // straight away, or once a slider or number box settles when `later`.
+    macro_rules! deck {
+        ($setter:ident, $later:expr, |$ui:ident, $st:ident $(, $arg:ident)*| $body:expr) => {{
             let ui_weak = ui.as_weak();
             let state = state.clone();
-            move |v: i32| {
-                let Some(ui) = ui_weak.upgrade() else { return };
-                let mut st = state.borrow_mut();
-                let b = ui.global::<Backend>();
-                // The window's values, which run ahead of the saved config.
-                let (warm, hot) = (b.get_temp_warm(), b.get_temp_hot());
-                let v = if key == "temp_warm" { v.clamp(30, hot - 1) } else { v.clamp(warm + 1, 120) };
-                st.set("display", key, v as i64);
-                if key == "temp_warm" { b.set_temp_warm(v) } else { b.set_temp_hot(v) }
-                st.save_later(&ui, &state);
-            }
-        };
-        b.on_set_temp_warm(set_temp("temp_warm"));
-        b.on_set_temp_hot(set_temp("temp_hot"));
+            b.$setter(move |$($arg),*| {
+                let Some($ui) = ui_weak.upgrade() else { return };
+                let change: Option<DisplayChange> = {
+                    let guard = state.borrow();
+                    #[allow(unused_variables)]
+                    let $st: &DisplaySettings = match &guard.display {
+                        Some(d) => d,
+                        None => return,
+                    };
+                    $body
+                };
+                if let Some(change) = change {
+                    edit_display(&$ui, &state, change, $later);
+                }
+            });
+        }};
     }
-    on!(on_move_tab, |ui, st, index, delta| {
-        let mut order: Vec<String> = st.cfg.display.tab_order().iter().map(|t| (*t).to_owned()).collect();
+    deck!(on_set_brightness, true, |ui, d, percent| {
+        let percent = percent.clamp(5, 100);
+        ui.global::<Backend>().set_brightness(percent);
+        Some(DisplayChange { brightness: Some(percent as u8), ..Default::default() })
+    });
+    deck!(on_set_start, false, |ui, d, index| {
+        let start = if index <= 0 { "first" } else { TABS.get(index as usize - 1).copied().unwrap_or("first") };
+        Some(DisplayChange { start: Some(start.into()), ..Default::default() })
+    });
+    deck!(on_set_dim, false, |ui, d, index| {
+        let Some((minutes, _)) = DIM_AFTER.get(index as usize) else { return };
+        Some(DisplayChange { dim_after: Some(minutes * 60), ..Default::default() })
+    });
+    deck!(on_set_off, false, |ui, d, index| {
+        let Some((minutes, _)) = OFF_AFTER.get(index as usize) else { return };
+        Some(DisplayChange { off_after: Some(minutes * 60), ..Default::default() })
+    });
+    // Each click of a number box sends one.
+    deck!(on_set_temp_warm, true, |ui, d, v| {
+        let v = v.clamp(30, d.temp_hot as i32 - 1);
+        ui.global::<Backend>().set_temp_warm(v);
+        Some(DisplayChange { temp_warm: Some(v as u8), ..Default::default() })
+    });
+    deck!(on_set_temp_hot, true, |ui, d, v| {
+        let v = v.clamp(d.temp_warm as i32 + 1, 120);
+        ui.global::<Backend>().set_temp_hot(v);
+        Some(DisplayChange { temp_hot: Some(v as u8), ..Default::default() })
+    });
+    deck!(on_set_flip, false, |ui, d, on| Some(DisplayChange { flip: Some(on), ..Default::default() }));
+    deck!(on_move_tab, false, |ui, d, index, delta| {
+        let mut order: Vec<String> = d.tab_order().iter().map(|t| (*t).to_owned()).collect();
         let (from, to) = (index as usize, (index + delta) as usize);
         if to >= order.len() {
             return;
         }
         order.swap(from, to);
-        st.set_list("display", "tabs", &order);
-        st.save(&ui);
-        st.refresh_display(&ui);
+        Some(DisplayChange { tabs: Some(order), ..Default::default() })
     });
-    on!(on_reset_tabs, |ui, st| {
-        st.remove("display", "tabs");
-        st.save(&ui);
-        st.refresh_display(&ui);
+    deck!(on_reset_tabs, false, |ui, d| {
+        Some(DisplayChange { tabs: Some(TABS.iter().map(|t| (*t).to_owned()).collect()), ..Default::default() })
     });
 
     // ---- Switches ----
@@ -1702,11 +1789,11 @@ mod tests {
             "[stats]\nbattery = true\n\n[display]\nbrightness = 70\n\n[[button]]\nid = 'a'\n"
         );
 
-        let mut doc: DocumentMut = "display = { brightness = 70 }\n[stats]\n".parse().unwrap();
-        ensure_table(&mut doc, "display");
+        let mut doc: DocumentMut = "notifications = { body = true }\n[stats]\n".parse().unwrap();
+        ensure_table(&mut doc, "notifications");
         let cfg: Config = toml::from_str(&doc.to_string()).unwrap();
-        assert_eq!(cfg.display.brightness, 70);
-        assert!(doc.to_string().contains("[display]"));
+        assert!(cfg.notifications.body);
+        assert!(doc.to_string().contains("[notifications]"));
     }
 
     #[test]

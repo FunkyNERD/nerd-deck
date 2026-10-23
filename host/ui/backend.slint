@@ -137,7 +137,11 @@ export global Backend {
     callback set-disk(int, bool);
     callback move-disk(int, int);
 
-    // Display, kept on the deck
+    // Display: the connected deck's own settings
+    // There's a deck connected whose settings can be changed; otherwise the
+    // note says why not.
+    in property <bool> deck-settings;
+    in property <string> deck-settings-note;
     in property <int> brightness;
     in property <[string]> start-options;
     in-out property <int> start-index;
@@ -145,8 +149,6 @@ export global Backend {
     in-out property <int> dim-index;
     in property <[string]> off-options;
     in-out property <int> off-index;
-    // Connected to firmware too old for these.
-    in property <bool> display-unsupported;
     callback set-brightness(int);
     callback set-start(int);
     callback set-dim(int);
@@ -156,8 +158,9 @@ export global Backend {
     in property <int> temp-hot;
     callback set-temp-warm(int);
     callback set-temp-hot(int);
-    // Upside down; set through set-flag with "display.flip".
+    // Upside down, for the USB cable on the other side.
     in property <bool> flip;
+    callback set-flip(bool);
     in property <[TabRow]> tabs;
     callback move-tab(int, int);
     callback reset-tabs();
@@ -165,7 +168,7 @@ export global Backend {
     // Switches, set through set-flag with these keys: "stats.removable",
     // "stats.battery", "notifications.enabled", "notifications.all",
     // "notifications.body", "notifications.dnd", "notifications.skip_low",
-    // "updates.firmware", "updates.check", "display.flip".
+    // "updates.firmware", "updates.check".
     in property <bool> removable;
     in property <bool> battery;
     in property <bool> notify-enabled;

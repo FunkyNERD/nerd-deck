@@ -183,9 +183,7 @@ export component DevicePage inherits VerticalLayout {
 
     SectionTitle {
         title: "Display";
-        subtitle: Backend.display-unsupported
-            ? "The deck's firmware is too old for these; they apply once it's updated."
-            : "Kept on the deck, so they survive a reboot.";
+        subtitle: Backend.deck-settings-note;
     }
     Card {
         VerticalLayout {
@@ -195,6 +193,7 @@ export component DevicePage inherits VerticalLayout {
                     spacing: 12px;
                     Slider {
                         width: 220px;
+                        enabled: Backend.deck-settings;
                         minimum: 5;
                         maximum: 100;
                         value: Backend.brightness;
@@ -215,8 +214,9 @@ export component DevicePage inherits VerticalLayout {
                 subtitle: "Turns the picture upside down, for the USB cable on the other side";
                 Toggle {
                     label: "Flip screen";
+                    enabled: Backend.deck-settings;
                     checked: Backend.flip;
-                    toggled(on) => { Backend.set-flag("display.flip", on); }
+                    toggled(on) => { Backend.set-flip(on); }
                 }
             }
             SettingRow {
@@ -226,6 +226,7 @@ export component DevicePage inherits VerticalLayout {
                     : "The tab the deck opens on, wherever it is in the order";
                 ComboBox {
                     width: 200px;
+                    enabled: Backend.deck-settings;
                     model: Backend.start-options;
                     current-index <=> Backend.start-index;
                     selected => { Backend.set-start(self.current-index); }
@@ -236,6 +237,7 @@ export component DevicePage inherits VerticalLayout {
                 subtitle: "Lowers brightness to 20% until the screen is touched";
                 ComboBox {
                     width: 200px;
+                    enabled: Backend.deck-settings;
                     model: Backend.dim-options;
                     current-index <=> Backend.dim-index;
                     selected => { Backend.set-dim(self.current-index); }
@@ -250,6 +252,7 @@ export component DevicePage inherits VerticalLayout {
                     Text { text: "from"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
                     SpinBox {
                         width: 96px;
+                        enabled: Backend.deck-settings;
                         minimum: 30;
                         maximum: Backend.temp-hot - 1;
                         value: Backend.temp-warm;
@@ -262,6 +265,7 @@ export component DevicePage inherits VerticalLayout {
                     Text { text: "from"; font-size: 13px; color: Theme.text-dim; vertical-alignment: center; }
                     SpinBox {
                         width: 96px;
+                        enabled: Backend.deck-settings;
                         minimum: Backend.temp-warm + 1;
                         maximum: 120;
                         value: Backend.temp-hot;
@@ -277,6 +281,7 @@ export component DevicePage inherits VerticalLayout {
                 last: true;
                 ComboBox {
                     width: 200px;
+                    enabled: Backend.deck-settings;
                     model: Backend.off-options;
                     current-index <=> Backend.off-index;
                     selected => { Backend.set-off(self.current-index); }

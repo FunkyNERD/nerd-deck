@@ -123,7 +123,7 @@ button's label can have its own colour (`color = "#FFA726"`). See
 The header has a pill per tab: System, Network, Storage, Battery and Controls.
 The open tab's pill shows its name; the others show just an icon. Tap one, or
 swipe between them. The order, and the tab the deck opens on, are yours to set
-in the settings window (or `[display]` in the config).
+in the settings window, while the deck is connected. Each deck keeps its own.
 
 **System** shows the CPU, memory (with swap as a note beside it), uptime and
 per-core load. Under memory is the GPU, if the PC has one it can read (NVIDIA
@@ -171,9 +171,11 @@ app as its notifications arrive (`journalctl --user -u nerd-deck | grep notifica
 icon) opens a window for everything in the config:
 
 - **Device:** the connected deck, its port, serial number, firmware and
-  protocol, and display settings kept on the deck: brightness, the tab it opens
-  on, dimming when idle, turning off when the PC is away, and the temperatures
-  at which the CPU's turns orange and red.
+  protocol, and the settings the deck keeps: brightness, flipping the screen,
+  the tab it opens on, dimming when idle, turning off when the PC is away, and
+  the temperatures at which the CPU's turns orange and red. Each deck has its
+  own, so two decks can be set up differently; they can only be changed while
+  that deck is connected.
 - **Buttons:** the Controls tab as a grid. Pick a button to change its label,
   its text colour (presets or any hex colour), its icon (the deck's own
   symbols, searchable), an image from a file, and what it does: a ready-made

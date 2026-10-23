@@ -38,28 +38,16 @@ pub enum HostMsg {
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         critical: bool,
     },
-    /// Settings the deck keeps: tab order, the tab it opens on, brightness and
-    /// power saving. Added in v6.
+    /// Changes to the settings the deck keeps, and how often stats come.
+    /// The deck replies with a device `Display`. Added in v6.
     Display {
-        tabs: Vec<&'static str>,
-        /// A tab's name, or "first".
-        start: String,
-        /// Percent.
-        brightness: u8,
-        /// Seconds untouched before dimming; 0 never.
-        dim_after: u32,
-        /// Seconds on the waiting screen before the screen turns off; 0 never.
-        off_after: u32,
-        /// °C from which the CPU temperature shows orange, and red.
-        temp_warm: u8,
-        temp_hot: u8,
-        /// Upside down, for the USB cable on the other side. Added in
-        /// firmware 0.7.0; older firmware ignores it.
-        flip: bool,
+        #[serde(flatten)]
+        change: DisplayChange,
         /// Milliseconds between stats, so the deck knows how long to wait
-        /// for the next before it takes the host for gone. Added in firmware
-        /// 0.9.0; older firmware waits 3 s.
-        stats_ms: u64,
+        /// for the next before it takes the host for gone. Not kept. Added in
+        /// firmware 0.9.0; older firmware waits 3 s.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        stats_ms: Option<u64>,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.
@@ -91,13 +79,152 @@ pub enum DeviceMsg {
         /// cropped to fill. Added in v5; older firmware shows images as icons.
         #[serde(default)]
         tile: Option<[u32; 2]>,
+        /// The settings this deck keeps. Added in firmware 0.10.0; older
+        /// firmware leaves it out, and keeps what it last had.
+        #[serde(default)]
+        display: Option<DisplaySettings>,
     },
     Press { id: String },
+    /// The deck's settings after a host `Display` changed them. Added in
+    /// firmware 0.10.0.
+    Display(DisplaySettings),
     /// An image finished arriving (`ok`) or was dropped after a lost chunk.
     /// Added in v5; the host waits for it before sending the next image.
     Image { id: String, ok: bool },
     #[serde(other)]
     Unknown,
+}
+
+/// The deck's tabs, by the names `tabs` and `start` take, in their default
+/// order.
+pub const TABS: [&str; 5] = ["system", "network", "storage", "battery", "controls"];
+
+/// The settings a deck keeps in its flash, so they apply from power-on. Each
+/// deck has its own: it reports them, and the host only changes them when
+/// asked to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    /// Tab order; tabs it leaves out follow, in their default order.
+    pub tabs: Vec<String>,
+    /// The tab the deck opens on: one of TABS, or "first" for the first in `tabs`.
+    pub start: String,
+    /// Backlight, 5-100 percent.
+    pub brightness: u8,
+    /// Seconds untouched before the screen dims; 0 never.
+    pub dim_after: u32,
+    /// Seconds on the waiting screen before the screen turns off; 0 never.
+    pub off_after: u32,
+    /// °C from which the CPU temperature shows orange, and red.
+    pub temp_warm: u8,
+    pub temp_hot: u8,
+    /// Upside down, for the USB cable on the other side.
+    pub flip: bool,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            tabs: TABS.iter().map(|t| (*t).to_owned()).collect(),
+            start: "first".into(),
+            brightness: 80,
+            dim_after: 0,
+            off_after: 0,
+            temp_warm: 70,
+            temp_hot: 85,
+            flip: false,
+        }
+    }
+}
+
+impl DisplaySettings {
+    /// Every tab, in this order.
+    pub fn tab_order(&self) -> Vec<&'static str> {
+        let mut order: Vec<&'static str> =
+            self.tabs.iter().filter_map(|t| TABS.iter().find(|n| **n == t.as_str()).copied()).collect();
+        for t in TABS {
+            if !order.contains(&t) {
+                order.push(t);
+            }
+        }
+        order
+    }
+
+    pub fn apply(&mut self, c: &DisplayChange) {
+        if let Some(v) = &c.tabs {
+            self.tabs = v.clone();
+        }
+        if let Some(v) = &c.start {
+            self.start = v.clone();
+        }
+        macro_rules! copy {
+            ($($f:ident),*) => { $(if let Some(v) = c.$f { self.$f = v; })* };
+        }
+        copy!(brightness, dim_after, off_after, temp_warm, temp_hot, flip);
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        use anyhow::ensure;
+        ensure!((5..=100).contains(&self.brightness), "brightness must be 5-100, not {}", self.brightness);
+        ensure!(
+            self.start == "first" || TABS.contains(&self.start.as_str()),
+            "start {:?} isn't \"first\" or a tab: {}",
+            self.start,
+            TABS.join(", ")
+        );
+        ensure!(
+            (30..=120).contains(&self.temp_warm) && (30..=120).contains(&self.temp_hot),
+            "temp_warm and temp_hot must be 30-120 °C"
+        );
+        ensure!(
+            self.temp_warm < self.temp_hot,
+            "temp_warm ({}) must be below temp_hot ({})",
+            self.temp_warm,
+            self.temp_hot
+        );
+        let mut seen = std::collections::HashSet::new();
+        for t in &self.tabs {
+            ensure!(TABS.contains(&t.as_str()), "unknown tab {t:?}; the tabs are {}", TABS.join(", "));
+            ensure!(seen.insert(t), "tabs lists {t:?} twice");
+        }
+        Ok(())
+    }
+}
+
+/// Some of a deck's settings, to change; the rest stay as they are.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayChange {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabs: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dim_after: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_after: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temp_warm: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temp_hot: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip: Option<bool>,
+}
+
+impl DisplayChange {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Adds `later`'s changes, which win.
+    pub fn merge(&mut self, later: DisplayChange) {
+        macro_rules! take {
+            ($($f:ident),*) => { $(if later.$f.is_some() { self.$f = later.$f; })* };
+        }
+        take!(tabs, start, brightness, dim_after, off_after, temp_warm, temp_hot, flip);
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -271,5 +398,45 @@ mod tests {
 
         let msg: DeviceMsg = serde_json::from_str(r#"{"type":"something_new"}"#).unwrap();
         assert!(matches!(msg, DeviceMsg::Unknown));
+
+        let msg: DeviceMsg =
+            serde_json::from_str(r#"{"type":"display","tabs":["controls"],"brightness":40,"flip":true}"#).unwrap();
+        let DeviceMsg::Display(d) = msg else { panic!("not a display") };
+        assert_eq!((d.brightness, d.flip, d.temp_hot), (40, true, 85));
+        assert_eq!(d.tab_order(), ["controls", "system", "network", "storage", "battery"]);
+
+        // Firmware before 0.10.0 doesn't report its settings.
+        let msg: DeviceMsg = serde_json::from_str(r#"{"type":"hello","fw":"0.9.0","proto":6}"#).unwrap();
+        assert!(matches!(msg, DeviceMsg::Hello { display: None, .. }));
+    }
+
+    #[test]
+    fn display_sends_only_changes() {
+        let msg = HostMsg::Display { change: DisplayChange::default(), stats_ms: Some(1000) };
+        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"type":"display","stats_ms":1000}"#);
+        let change = DisplayChange { flip: Some(true), ..Default::default() };
+        let msg = HostMsg::Display { change, stats_ms: None };
+        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"type":"display","flip":true}"#);
+    }
+
+    #[test]
+    fn display_changes_validate() {
+        let mut d = DisplaySettings::default();
+        let mut change = DisplayChange { temp_warm: Some(60), ..Default::default() };
+        change.merge(DisplayChange { temp_hot: Some(80), brightness: Some(50), ..Default::default() });
+        d.apply(&change);
+        assert!(d.validate().is_ok());
+        assert_eq!((d.temp_warm, d.temp_hot, d.brightness), (60, 80, 50));
+
+        let bad = |c: DisplayChange| {
+            let mut d = DisplaySettings::default();
+            d.apply(&c);
+            d.validate().is_err()
+        };
+        assert!(bad(DisplayChange { brightness: Some(2), ..Default::default() }));
+        assert!(bad(DisplayChange { start: Some("nope".into()), ..Default::default() }));
+        assert!(bad(DisplayChange { temp_warm: Some(90), ..Default::default() }));
+        assert!(bad(DisplayChange { tabs: Some(vec!["system".into(), "system".into()]), ..Default::default() }));
+        assert!(serde_json::from_str::<DisplayChange>(r#"{"stats_ms":5}"#).is_err());
     }
 }
