@@ -21,7 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Default features pull in libudev for USB VID/PID lookup (needs libudev-dev to build).
 serialport = "4"
-sysinfo = "0.32"
+# Without rayon ("multithread"): its threads cost far more to wake on every
+# sample than they save on a refresh this small.
+sysinfo = { version = "0.32", default-features = false, features = ["component", "disk", "network", "system"] }
 toml = "0.8"
 # The daily update check against the GitHub releases API.
 ureq = { version = "3.5.0", features = ["json"] }
