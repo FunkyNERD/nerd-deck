@@ -31,34 +31,6 @@ export component FirmwarePage inherits VerticalLayout {
     spacing: 24px;
     alignment: start;
 
-    if Backend.update != "": Rectangle {
-        border-radius: 12px;
-        background: #10272D;
-        border-width: 1px;
-        border-color: #1D5A63;
-        HorizontalLayout {
-            padding: 14px;
-            padding-left: 16px;
-            spacing: 14px;
-            Glyph { text: Glyphs.download; color: Theme.cyan; }
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                Text { text: "nerd-deck " + Backend.update + " is available"; font-size: 14px; font-weight: 600; color: Theme.text; }
-                Text {
-                    text: "Install it with your package manager, or download it from the release.";
-                    font-size: 12px;
-                    color: Theme.text-soft;
-                }
-            }
-            PushButton {
-                text: "View release";
-                primary: true;
-                clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck/releases/latest"); }
-            }
-        }
-    }
-
     Card {
         fw := VerticalLayout {
             padding: 20px;

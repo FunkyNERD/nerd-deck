@@ -17,6 +17,91 @@ import { AboutPage } from "pages/about.slint";
 export { Backend }
 export { DeckButton, IconChoice, Swatch, DiskRow, TabRow, AppRow, KnownDeck } from "backend.slint";
 
+// Shown on every page while a newer nerd-deck release is out, until dismissed:
+// what's new in it, and the package to install, or how to update a source install.
+component UpdateBanner inherits Rectangle {
+    callback dismiss;
+    property <bool> show-changes;
+    background: #10272D;
+    VerticalLayout {
+        padding-left: 24px;
+        padding-right: 16px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 12px;
+            Glyph { text: Glyphs.download; color: Theme.cyan; }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: "nerd-deck " + Backend.update + " is available";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                Text {
+                    text: Backend.update-from-source
+                        ? "You have " + Backend.version + ", built from source. Update it with git pull, then host/install.sh."
+                        : Backend.update-package != ""
+                        ? "You have " + Backend.version + ". Download downloads " + Backend.update-package + " and opens it in your software installer."
+                        : "You have " + Backend.version + ". Get the new version from the releases page.";
+                    font-size: 12px;
+                    color: Theme.text-soft;
+                    wrap: word-wrap;
+                }
+            }
+            if Backend.update-changes.length > 0: PushButton {
+                text: root.show-changes ? "Hide what's new" : "What's new";
+                flat: true;
+                clicked => { root.show-changes = !root.show-changes; }
+            }
+            if Backend.update-package != "" && !Backend.update-from-source: PushButton {
+                text: Backend.update-busy == "downloading" ? "Downloading…" : "Download";
+                icon: Glyphs.download;
+                primary: true;
+                enabled: Backend.update-busy == "";
+                clicked => { Backend.install-update(); }
+            }
+            if Backend.update-package == "" || Backend.update-from-source: PushButton {
+                text: "Releases page";
+                primary: true;
+                clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck/releases/latest"); }
+            }
+            PushButton {
+                icon: Glyphs.cross;
+                flat: true;
+                accessible-label: "Dismiss";
+                clicked => { root.dismiss(); }
+            }
+        }
+        if Backend.update-result != "": HorizontalLayout {
+            padding-left: 30px;
+            Text {
+                text: Backend.update-result;
+                font-size: 12px;
+                color: Backend.update-failed ? Theme.red-text : Theme.green-text;
+                wrap: word-wrap;
+            }
+        }
+        if root.show-changes: VerticalLayout {
+            padding-left: 30px;
+            spacing: 4px;
+            for change in Backend.update-changes: HorizontalLayout {
+                spacing: 8px;
+                Text { text: "•"; font-size: 13px; color: Theme.cyan; }
+                Text { text: change; font-size: 13px; color: Theme.text; wrap: word-wrap; horizontal-stretch: 1; }
+            }
+        }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: #1D5A63;
+    }
+}
+
 component NavItem inherits Rectangle {
     in property <string> glyph;
     in property <string> label;
@@ -65,6 +150,8 @@ export component SettingsWindow inherits Window {
     default-font-size: 14px;
 
     in-out property <int> page;
+    // The release whose notice was dismissed; a newer one shows again.
+    property <string> dismissed-update;
 
     // The standard widgets (fields, menus, Slint's credit) follow the window's dark look.
     init => { Palette.color-scheme = ColorScheme.dark; }
@@ -196,6 +283,10 @@ export component SettingsWindow inherits Window {
                     height: 1px;
                     background: Theme.rule;
                 }
+            }
+
+            if Backend.update != "" && Backend.update != root.dismissed-update: UpdateBanner {
+                dismiss => { root.dismissed-update = Backend.update; }
             }
 
             // Pages scroll when the window is shorter than they are. The

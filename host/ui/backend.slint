@@ -78,6 +78,19 @@ export global Backend {
     in property <int> proto;
     in property <string> version;
     in property <string> update;
+    // About that release, once looked up: what's new since this version, and
+    // the package to download for this system ("" for a source install or
+    // when there's none).
+    in property <[string]> update-changes;
+    in property <string> update-package;
+    // This app was built from source (install.sh), so it's updated that way.
+    in property <bool> update-from-source;
+    // "downloading" or "".
+    in property <string> update-busy;
+    // What happened to the download: where it went, or why it failed.
+    in property <string> update-result;
+    in property <bool> update-failed;
+    callback install-update();
     in property <bool> flashing;
     // Why the service's last install failed.
     in property <string> flash-error;

@@ -228,8 +228,19 @@ impl Host {
         }
     }
 
+    /// Puts a newer release, if the update check found one, in the status for
+    /// the tray and the settings window, deck or no deck, and returns it.
+    fn publish_update(&self) -> Option<updates::Available> {
+        let available = self.updates.as_ref().and_then(|u| u.lock().unwrap().clone());
+        let available = available.filter(|_| self.cfg.updates.check);
+        let update = available.as_ref().map(|a| a.version.clone()).unwrap_or_default();
+        self.api.update(|s| s.update = update);
+        available
+    }
+
     /// Wait between connection attempts, still answering commands.
     fn idle(&mut self, wait: Duration) {
+        self.publish_update();
         let until = Instant::now() + wait;
         while let Ok(cmd) = self.commands.recv_timeout(until.saturating_duration_since(Instant::now()))
         {
@@ -299,10 +310,7 @@ impl Host {
         let mut deck_board = String::new();
 
         loop {
-            let available = self.updates.as_ref().and_then(|u| u.lock().unwrap().clone());
-            let available = available.filter(|_| self.cfg.updates.check);
-            let update = available.as_ref().map(|a| a.version.clone()).unwrap_or_default();
-            self.api.update(|s| s.update = update);
+            let available = self.publish_update();
             if let Some(a) = available.filter(|a| a.seq != notified) {
                 let text = format!("Update available: nerd-deck {}", a.version);
                 conn.send(&HostMsg::Notify { text })?;

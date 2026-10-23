@@ -923,6 +923,31 @@ fn call(ui: &SettingsWindow, f: impl FnOnce() -> zbus::Result<()> + Send + 'stat
     });
 }
 
+/// Ask GitHub what's new in the app's newer releases, and for this system's package.
+fn check_app(ui: &SettingsWindow) {
+    let b = ui.global::<Backend>();
+    b.set_update_from_source(!updates::packaged());
+    b.set_update_changes(ModelRc::default());
+    b.set_update_package("".into());
+    b.set_update_result("".into());
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let update = updates::check_app();
+        let _ = weak.upgrade_in_event_loop(move |ui| {
+            let b = ui.global::<Backend>();
+            match update {
+                Ok(Some(update)) => {
+                    let changes: Vec<SharedString> = update.changes.into_iter().map(Into::into).collect();
+                    b.set_update_changes(ModelRc::new(VecModel::from(changes)));
+                    b.set_update_package(update.package.map(|p| p.name).unwrap_or_default().into());
+                }
+                Ok(None) => {}
+                Err(e) => log::debug!("looking up the release: {e:#}"),
+            }
+        });
+    });
+}
+
 /// Ask GitHub for the newest firmware this host can install on the deck's board.
 fn check_firmware(ui: &SettingsWindow) {
     let b = ui.global::<Backend>();
@@ -970,6 +995,10 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
     b.set_board(s.board.as_str().into());
     b.set_proto(s.proto as i32);
     b.set_version(if s.version.is_empty() { env!("CARGO_PKG_VERSION").into() } else { s.version }.into());
+    // Look up what's new in a release once it's announced.
+    if !s.update.is_empty() && b.get_update() != s.update.as_str() {
+        check_app(ui);
+    }
     b.set_update(s.update.into());
     b.set_flashing(s.flashing);
     let flash_error = s.flash_error.unwrap_or_default();
@@ -1490,6 +1519,41 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
                 Err(e) => {
                     busy(&ui, "");
                     ui.global::<Backend>().set_fw_error(format!("{e:#}").into());
+                }
+            });
+        });
+    });
+    on!(on_install_update, |ui, st| {
+        let b = ui.global::<Backend>();
+        b.set_update_busy("downloading".into());
+        b.set_update_result("".into());
+        b.set_update_failed(false);
+        let weak = ui.as_weak();
+        thread::spawn(move || {
+            let downloaded = updates::check_app().and_then(|update| {
+                let package = update.and_then(|u| u.package).context("there's no package for this system")?;
+                updates::download_package(&package)
+            });
+            // The desktop opens a .deb or .rpm in its software installer.
+            let opened = downloaded.and_then(|path| {
+                Command::new("xdg-open").arg(&path).spawn().with_context(|| format!("opening {}", path.display()))?;
+                Ok(path)
+            });
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                let b = ui.global::<Backend>();
+                b.set_update_busy("".into());
+                match opened {
+                    Ok(path) => b.set_update_result(
+                        format!(
+                            "Saved to {} and opened in your software installer. Once it's installed, restart nerd-deck to use it.",
+                            path.display()
+                        )
+                        .into(),
+                    ),
+                    Err(e) => {
+                        b.set_update_failed(true);
+                        b.set_update_result(format!("{e:#}").into());
+                    }
                 }
             });
         });
