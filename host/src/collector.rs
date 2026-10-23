@@ -166,6 +166,9 @@ impl Collector {
             ProcessRefreshKind::new().with_cpu().with_memory().with_exe(UpdateKind::OnlyIfNotSet),
         );
         let cores = self.sys.cpus().len().max(1) as f32;
+        // Not nerd-deck itself: the service, the tray and the settings window
+        // are all this program.
+        let ours = own_program();
         let mut by_name: HashMap<String, (f32, u64)> = HashMap::new();
         for p in self.sys.processes().values() {
             // Threads show up as processes too; count each once.
@@ -179,7 +182,12 @@ impl Collector {
                 .and_then(Path::file_name)
                 .unwrap_or(p.name())
                 .to_string_lossy()
-                .into_owned();
+                // A program replaced while it runs, say by an upgrade.
+                .trim_end_matches(" (deleted)")
+                .to_owned();
+            if name == ours {
+                continue;
+            }
             let e = by_name.entry(name).or_default();
             e.0 += p.cpu_usage();
             e.1 += p.memory();
@@ -280,6 +288,16 @@ fn parse_diskstats(text: &str) -> HashMap<String, (u64, u64)> {
 fn block_device(d: &sysinfo::Disk) -> Option<String> {
     let path = std::fs::canonicalize(d.name()).ok()?;
     Some(path.file_name()?.to_str()?.to_owned())
+}
+
+/// This program's file name, as the busiest-process count names programs.
+fn own_program() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
+        // Replaced while running, the link reads "nerd-deck (deleted)".
+        .map(|n| n.trim_end_matches(" (deleted)").to_owned())
+        .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_owned())
 }
 
 #[cfg(test)]
