@@ -129,6 +129,8 @@ enum SessionEnd {
     Flash(device::Port, firmware::Image),
     /// The device settings changed; connect again with the new ones.
     Reconnect,
+    /// No port matches the device settings.
+    NoDevice,
 }
 
 /// The service: streams stats to the deck, runs its buttons, and answers the
@@ -136,6 +138,9 @@ enum SessionEnd {
 struct Host {
     /// From `--config`; None means the default location.
     config_path: Option<PathBuf>,
+    /// The serial devices there were when no port matched; until they
+    /// change, the deck can't have turned up.
+    searched: Option<Vec<String>>,
     cfg: Config,
     collector: Collector,
     /// Started once the config turns them on; a reload never stops them, but
@@ -165,6 +170,7 @@ impl Host {
         };
         let mut host = Self {
             config_path,
+            searched: None,
             collector: new_collector(&cfg),
             flashing: firmware::Flashing::new(&cfg),
             cfg,
@@ -223,6 +229,7 @@ impl Host {
                     self.api.update(disconnected);
                     continue;
                 }
+                Ok(SessionEnd::NoDevice) => {}
                 Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
             }
             self.api.update(disconnected);
@@ -269,6 +276,9 @@ impl Host {
     fn reload(&mut self) -> Result<bool> {
         let cfg = Config::load(self.config_path.as_deref())?;
         let device_changed = cfg.device != self.cfg.device;
+        if device_changed {
+            self.searched = None;
+        }
         if cfg.stats != self.cfg.stats {
             // In place: a new collector would start another GPU and mount
             // watcher, and the old ones never stop.
@@ -295,7 +305,22 @@ impl Host {
     /// Connect, then stream stats and handle button presses and commands until
     /// the link drops.
     fn run_session(&mut self) -> Result<SessionEnd> {
-        let port = device::find_port(&self.cfg.device)?;
+        let devices = device::serial_devices();
+        if self.searched.as_ref() == Some(&devices) {
+            return Ok(SessionEnd::NoDevice);
+        }
+        let port = match device::find_port(&self.cfg.device) {
+            Ok(port) => port,
+            Err(e) => {
+                // Said once per wait, not every retry.
+                if self.searched.is_none() {
+                    log::info!("{e:#}; waiting for it to be plugged in");
+                }
+                self.searched = Some(devices);
+                return Ok(SessionEnd::NoDevice);
+            }
+        };
+        self.searched = None;
         let mut conn = Connection::open(&port.name, self.cfg.device.baud)?;
         log::info!("connected to {}", port.name);
         let opened = Instant::now();

@@ -29,6 +29,17 @@ impl Port {
     }
 }
 
+/// The serial devices the kernel knows of, by name. Far cheaper than
+/// `find_port`'s scan of each one's USB details, so a wait for the deck
+/// scans again only once this changes: something was plugged in or out.
+pub fn serial_devices() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir("/sys/class/tty")
+        .map(|dir| dir.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
 /// Resolve which serial port to use: the configured one, or the first USB
 /// port matching the configured VID/PID.
 pub fn find_port(cfg: &DeviceConfig) -> Result<Port> {
