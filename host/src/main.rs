@@ -160,6 +160,7 @@ impl Host {
                 .or_else(Config::default_path)
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
+            interval_ms: Some(cfg.stats.interval_ms),
             ..Default::default()
         };
         let mut host = Self {
@@ -284,6 +285,7 @@ impl Host {
             // The settings window may have forgotten a device.
             self.flashing.reload_known();
         }
+        self.api.update(|s| s.interval_ms = Some(cfg.stats.interval_ms));
         self.cfg = cfg;
         self.start_watchers();
         log::info!("reloaded the config");

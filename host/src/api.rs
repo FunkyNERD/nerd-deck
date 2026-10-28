@@ -54,6 +54,9 @@ pub struct Status {
     /// The connected deck's own settings (protocol::DisplaySettings) as JSON;
     /// None without a deck, or when its firmware is too old to report them.
     pub display: Option<String>,
+    /// How often stats go to the deck: the config's `stats.interval_ms`.
+    /// None from an older service.
+    pub interval_ms: Option<u64>,
 }
 
 pub type Reply = Sender<Result<(), String>>;

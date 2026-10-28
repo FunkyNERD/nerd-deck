@@ -9,13 +9,14 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use ksni::blocking::TrayMethods;
-use ksni::menu::{StandardItem, SubMenu};
+use ksni::menu::{RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, ToolTip};
 use zbus::blocking::Connection;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
 use crate::api::{self, NerdDeckProxyBlocking, Status};
-use crate::unit;
+use crate::settings::INTERVALS;
+use crate::{settings, unit};
 
 /// The app name on the tray's own desktop notifications. The service never
 /// copies these to the deck.
@@ -110,6 +111,30 @@ impl DeckTray {
         });
     }
 
+    /// The update rate choices, with the current one if it isn't among them,
+    /// and which one is current.
+    fn rates(&self) -> (Vec<u64>, usize) {
+        let mut rates: Vec<u64> = INTERVALS.iter().map(|(ms, _)| *ms).collect();
+        let current = self.status.as_ref().and_then(|s| s.interval_ms);
+        let selected = match current {
+            Some(ms) => rates.iter().position(|r| *r == ms).unwrap_or_else(|| {
+                rates.push(ms);
+                rates.len() - 1
+            }),
+            None => usize::MAX,
+        };
+        (rates, selected)
+    }
+
+    /// Write the new rate to the service's config file and have it reload.
+    fn set_rate(&self, ms: u64) {
+        let Some(path) = self.status.as_ref().map(|s| s.config.clone()) else { return };
+        self.call("Update rate", move |d| {
+            settings::set_interval(path.as_ref(), ms).map_err(|e| zbus::Error::Failure(format!("{e:#}")))?;
+            d.reload()
+        });
+    }
+
     /// Start or stop the service's unit off the tray's thread.
     fn control(&self, what: &'static str, f: fn() -> Result<(), String>) {
         thread::spawn(move || {
@@ -201,6 +226,36 @@ impl ksni::Tray for DeckTray {
                     }
                     .into(),
                 ],
+                ..Default::default()
+            }
+            .into(),
+        );
+        let (rates, selected) = self.rates();
+        menu.push(
+            SubMenu {
+                label: "Update rate".into(),
+                icon_name: "chronometer".into(),
+                // Needs the config file the service reads, and an up-to-date one.
+                enabled: self.status.as_ref().is_some_and(|s| s.interval_ms.is_some()),
+                submenu: vec![RadioGroup {
+                    selected,
+                    select: Box::new(move |t: &mut Self, i| {
+                        if let Some(ms) = t.rates().0.get(i) {
+                            t.set_rate(*ms);
+                        }
+                    }),
+                    options: rates
+                        .iter()
+                        .map(|ms| RadioItem {
+                            label: INTERVALS
+                                .iter()
+                                .find(|(r, _)| r == ms)
+                                .map_or_else(|| format!("{ms} ms"), |(_, l)| (*l).into()),
+                            ..Default::default()
+                        })
+                        .collect(),
+                }
+                .into()],
                 ..Default::default()
             }
             .into(),

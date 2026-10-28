@@ -51,7 +51,7 @@ const STATUS_POLL: Duration = Duration::from_secs(3);
 
 /// The choices offered for `stats.interval_ms`. Down to config::MIN_INTERVAL_MS;
 /// under a second the window warns the deck may respond more slowly.
-const INTERVALS: [(u64, &str); 6] = [
+pub const INTERVALS: [(u64, &str); 6] = [
     (100, "100 ms"),
     (200, "200 ms"),
     (500, "Half a second"),
@@ -622,6 +622,19 @@ impl State {
 
     /// Follow the deck's settings in the status, except while edits made here
     /// are on their way to it.
+    /// Take up an update rate the service read from the file, as when the
+    /// tray changed it, so a later save here doesn't put the old one back.
+    fn follow_interval(&mut self, ui: &SettingsWindow, status: Option<&Status>) {
+        let Some(ms) = status.and_then(|s| s.interval_ms) else { return };
+        let before = self.status.as_ref().and_then(|s| s.interval_ms);
+        if before.is_none_or(|b| b == ms) || ms == self.cfg.stats.interval_ms {
+            return;
+        }
+        self.set("stats", "interval_ms", ms as i64);
+        self.cfg.stats.interval_ms = ms;
+        show_interval(&ui.global::<Backend>(), ms);
+    }
+
     fn follow_deck(&mut self, ui: &SettingsWindow) {
         let reported: Option<DisplaySettings> = self
             .status
@@ -694,18 +707,7 @@ impl State {
         // they're filled by refresh_buttons.
         b.set_icons(self.icon_model());
 
-        let interval = cfg.stats.interval_ms;
-        let mut intervals: Vec<SharedString> = INTERVALS.iter().map(|(_, l)| (*l).into()).collect();
-        let index = match INTERVALS.iter().position(|(ms, _)| *ms == interval) {
-            Some(i) => i,
-            None => {
-                intervals.push(format!("{interval} ms").into());
-                intervals.len() - 1
-            }
-        };
-        b.set_intervals(ModelRc::new(VecModel::from(intervals)));
-        b.set_interval_fast(interval < 1000);
-        b.set_interval_index(index as i32);
+        show_interval(&b, cfg.stats.interval_ms);
 
         let networks = sysinfo::Networks::new_with_refreshed_list();
         let mut names: Vec<String> = networks.iter().map(|(n, _)| n.clone()).filter(|n| n != "lo").collect();
@@ -1000,6 +1002,42 @@ fn edit_display(ui: &SettingsWindow, state: &Rc<RefCell<State>>, change: Display
     });
 }
 
+fn show_interval(b: &Backend, interval: u64) {
+    let mut intervals: Vec<SharedString> = INTERVALS.iter().map(|(_, l)| (*l).into()).collect();
+    let index = match INTERVALS.iter().position(|(ms, _)| *ms == interval) {
+        Some(i) => i,
+        None => {
+            intervals.push(format!("{interval} ms").into());
+            intervals.len() - 1
+        }
+    };
+    b.set_intervals(ModelRc::new(VecModel::from(intervals)));
+    b.set_interval_fast(interval < 1000);
+    b.set_interval_index(index as i32);
+}
+
+/// Sets `stats.interval_ms` in the config file at `path`, for the tray. The
+/// caller asks the service to reload.
+pub fn set_interval(path: &Path, ms: u64) -> Result<()> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => config::EXAMPLE.to_owned(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut doc: DocumentMut = text.parse().with_context(|| format!("parsing {}", path.display()))?;
+    ensure_table(&mut doc, "stats");
+    let mut value = Value::from(ms as i64);
+    let item = &mut doc["stats"]["interval_ms"];
+    // Keep the comment after the value.
+    if let Some(old) = item.as_value() {
+        *value.decor_mut() = old.decor().clone();
+    }
+    *item = Item::Value(value);
+    let text = doc.to_string();
+    toml::from_str::<Config>(&text)?.validate()?;
+    write_atomically(path, &text).with_context(|| format!("writing {}", path.display()))
+}
+
 fn problem(ui: &SettingsWindow, text: String) {
     log::warn!("{text}");
     ui.global::<Backend>().set_problem(text.into());
@@ -1164,6 +1202,7 @@ fn watch_status(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
                         let mut state = state.borrow_mut();
                         if state.status != status {
                             show_status(&ui, status.as_ref());
+                            state.follow_interval(&ui, status.as_ref());
                             state.status = status;
                             state.follow_deck(&ui);
                             state.refresh_known(&ui);
@@ -1766,6 +1805,20 @@ fn tilde(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_sets_the_interval_keeping_comments() {
+        let dir = std::env::temp_dir().join(format!("nerd-deck-interval-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "[stats]\ninterval_ms = 1000 # how often\n").unwrap();
+        set_interval(&path, 200).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[stats]\ninterval_ms = 200 # how often\n");
+        // Too fast isn't written.
+        assert!(set_interval(&path, 20).is_err());
+        assert!(fs::read_to_string(&path).unwrap().contains("= 200"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn titles_disks() {
