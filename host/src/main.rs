@@ -17,12 +17,13 @@ mod tray;
 mod unit;
 mod updates;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use base64::Engine;
 use clap::Parser;
 
@@ -35,6 +36,7 @@ use protocol::{ButtonDef, DeviceMsg, DisplayChange, DisplaySettings, HostMsg, PR
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// The device says hello on boot and in reply to ours, well within this.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+const HELLO_POLL: Duration = Duration::from_millis(500);
 
 /// Decoded bytes per `image` message; base64 keeps each line well under the
 /// device's 2 KB limit.
@@ -129,7 +131,7 @@ enum SessionEnd {
     Flash(device::Port, firmware::Image),
     /// The device settings changed; connect again with the new ones.
     Reconnect,
-    /// No port matches the device settings.
+    /// No deck on the ports that match the device settings.
     NoDevice,
 }
 
@@ -141,6 +143,9 @@ struct Host {
     /// The serial devices there were when no port matched; until they
     /// change, the deck can't have turned up.
     searched: Option<Vec<String>>,
+    /// Boards on matching ports that didn't say hello, by `Port::key`: other
+    /// ESP32s. Left alone until they're unplugged.
+    strangers: HashSet<String>,
     cfg: Config,
     collector: Collector,
     /// Started once the config turns them on; a reload never stops them, but
@@ -171,6 +176,7 @@ impl Host {
         let mut host = Self {
             config_path,
             searched: None,
+            strangers: HashSet::new(),
             collector: new_collector(&cfg),
             flashing: firmware::Flashing::new(&cfg),
             cfg,
@@ -309,26 +315,45 @@ impl Host {
         if self.searched.as_ref() == Some(&devices) {
             return Ok(SessionEnd::NoDevice);
         }
-        let port = match device::find_port(&self.cfg.device) {
-            Ok(port) => port,
-            Err(e) => {
-                // Said once per wait, not every retry.
-                if self.searched.is_none() {
-                    log::info!("{e:#}; waiting for it to be plugged in");
-                }
-                self.searched = Some(devices);
-                return Ok(SessionEnd::NoDevice);
+        let mut ports = device::find_ports(&self.cfg.device)?;
+        // A stranger that was unplugged may come back as a deck.
+        self.strangers.retain(|key| ports.iter().any(|p| p.key() == key));
+        ports.retain(|p| !self.strangers.contains(p.key()));
+        // Decks that have said hello before go first.
+        ports.sort_by_key(|p| !self.flashing.is_known(p));
+        if ports.is_empty() {
+            // Said once per wait, not every retry.
+            if self.searched.is_none() {
+                log::info!("no deck found; waiting for one to be plugged in");
             }
-        };
+            self.searched = Some(devices);
+            return Ok(SessionEnd::NoDevice);
+        }
         self.searched = None;
-        let mut conn = Connection::open(&port.name, self.cfg.device.baud)?;
-        log::info!("connected to {}", port.name);
+        // The first port that opens: another program may hold one.
+        let mut opened = Err(anyhow!("no port to open"));
+        for port in ports {
+            match Connection::open(&port.name, self.cfg.device.baud) {
+                Ok(conn) => {
+                    opened = Ok((port, conn));
+                    break;
+                }
+                Err(e) => opened = Err(e),
+            }
+        }
+        let (port, mut conn) = opened?;
+        // A port named in the config is the deck's, hello or not.
+        let trusted = self.cfg.device.port.is_some() || self.flashing.is_known(&port);
+        log::info!("opened {}; asking if it's a deck", port.name);
         let opened = Instant::now();
-        self.api.update(|s| {
+        // Connected once it says it's a deck.
+        self.api.update(|s| s.checking = Some(port.name.clone()));
+        let deck_connected = |s: &mut api::Status| {
+            s.checking = None;
             s.connected = true;
             s.port = port.name.clone();
             s.serial = port.serial().unwrap_or_default().to_owned();
-        });
+        };
 
         // The device answers with its own hello, and the buttons follow that:
         // it says how big their images should be.
@@ -341,7 +366,10 @@ impl Host {
         let mut next_stats = Instant::now();
         // The update check's `seq` last shown on the device; 0 = none this session.
         let mut notified = 0;
+        // Nothing but our hello goes to the device until it answers: it may
+        // be some other ESP32.
         let mut said_hello = false;
+        let mut waited_for_hello = false;
         // The deck's firmware version and board, once it says hello.
         let mut deck_fw = String::new();
         let mut deck_board = String::new();
@@ -350,13 +378,18 @@ impl Host {
 
         loop {
             let available = self.publish_update();
-            if let Some(a) = available.filter(|a| a.seq != notified) {
+            if let Some(a) = available.filter(|a| said_hello && a.seq != notified) {
                 let text = format!("Update available: nerd-deck {}", a.version);
                 conn.send(&HostMsg::Notify { text })?;
                 notified = a.seq;
             }
 
-            let incoming: Vec<_> = self.notifications.iter().flat_map(|rx| rx.try_iter()).collect();
+            // Kept for after the hello.
+            let incoming: Vec<_> = if said_hello {
+                self.notifications.iter().flat_map(|rx| rx.try_iter()).collect()
+            } else {
+                Vec::new()
+            };
             for raw in incoming {
                 self.seen_apps.record(&raw);
                 if !self.cfg.notifications.enabled {
@@ -375,8 +408,10 @@ impl Host {
                             if device_changed {
                                 return Ok(SessionEnd::Reconnect);
                             }
-                            send_stats_ms(&self.cfg, &mut conn)?;
-                            send_buttons(&self.cfg, &mut conn, tile)?;
+                            if said_hello {
+                                send_stats_ms(&self.cfg, &mut conn)?;
+                                send_buttons(&self.cfg, &mut conn, tile)?;
+                            }
                         }
                         Err(e) => {
                             let _ = reply.send(Err(format!("{e:#}")));
@@ -430,23 +465,36 @@ impl Host {
                 }
             }
 
-            // A device that never says hello may be stuck after an interrupted flash.
-            if !said_hello && opened.elapsed() >= HELLO_TIMEOUT {
-                said_hello = true; // only decide once per session
+            if !said_hello && !waited_for_hello && opened.elapsed() >= HELLO_TIMEOUT {
+                waited_for_hello = true;
+                if !trusted {
+                    log::info!(
+                        "{} ({}) didn't say hello, so it isn't a deck; leaving it alone until it's unplugged",
+                        port.name,
+                        port.key()
+                    );
+                    self.strangers.insert(port.key().to_owned());
+                    return Ok(SessionEnd::NoDevice);
+                }
+                // A known deck that never says hello may be stuck after an interrupted flash.
                 if let Some(fw) = self.flashing.should_recover(&port).and_then(load_firmware) {
                     return Ok(SessionEnd::Flash(port, fw));
                 }
                 log::warn!("no hello from the device after {}s", HELLO_TIMEOUT.as_secs());
+                // It's the deck's port all the same.
+                self.api.update(deck_connected);
             }
 
-            if Instant::now() >= next_stats {
+            if said_hello && Instant::now() >= next_stats {
                 conn.send(&HostMsg::Stats(self.collector.sample()))?;
                 next_stats += Duration::from_millis(self.cfg.stats.interval_ms);
                 // A slow sample mustn't leave a backlog to send in a burst.
                 next_stats = next_stats.max(Instant::now());
             }
 
-            match conn.rx.recv_timeout(next_stats.saturating_duration_since(Instant::now())) {
+            // Before the hello, still checks for commands and its deadline.
+            let until = if said_hello { next_stats } else { Instant::now() + HELLO_POLL };
+            match conn.rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
                 Ok(msg) => {
                     if let DeviceMsg::Display(d) = &msg {
                         deck_display = Some(d.clone());
@@ -466,6 +514,7 @@ impl Host {
                         // The device rebooted, so it lost any notice.
                         notified = 0;
                         self.api.update(|s| {
+                            deck_connected(s);
                             s.firmware = fw.clone();
                             s.proto = *proto;
                             s.board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
@@ -497,6 +546,7 @@ fn load_firmware(cached: firmware::Cached) -> Option<firmware::Image> {
 
 fn disconnected(s: &mut api::Status) {
     s.connected = false;
+    s.checking = None;
     s.port.clear();
     s.serial.clear();
     s.firmware.clear();

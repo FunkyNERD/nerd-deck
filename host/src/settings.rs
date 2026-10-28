@@ -1160,6 +1160,7 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
         b.set_service_busy("".into());
     }
     b.set_connected(s.connected);
+    b.set_checking(s.checking.unwrap_or_default().into());
     b.set_port(s.port.into());
     b.set_serial(s.serial.into());
     b.set_firmware(s.firmware.as_str().into());

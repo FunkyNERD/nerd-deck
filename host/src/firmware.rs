@@ -168,6 +168,11 @@ impl Flashing {
         self.known = KnownDevices::load();
     }
 
+    /// Whether the device on `port` has said hello as a deck before.
+    pub fn is_known(&self, port: &Port) -> bool {
+        port.serial().is_some_and(|s| self.known.board(s).is_some())
+    }
+
     fn firmware(&self, board: &str) -> Option<Cached> {
         self.enabled.then(|| (self.newest)(board)).flatten()
     }

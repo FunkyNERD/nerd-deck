@@ -85,6 +85,7 @@ impl DeckTray {
     fn summary(&self) -> String {
         match &self.status {
             None => "The nerd-deck service isn't running".into(),
+            Some(Status { checking: Some(port), .. }) => format!("Checking the device on {port}…"),
             Some(s) if !s.connected => "Waiting for the deck".into(),
             Some(s) if s.firmware.is_empty() => format!("Connected on {}", s.port),
             Some(s) => format!("Connected · firmware {}", s.firmware),

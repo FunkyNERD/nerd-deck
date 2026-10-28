@@ -106,7 +106,9 @@ config. The settings window (below) edits it for you; if you edit it by hand,
 choose **Reload config** in the tray (or restart the service).
 
 The app finds the device by VID/PID, sends `hello` and the button layout, then
-streams stats. It reconnects automatically if the device is unplugged or reset.
+streams stats. Other ESP32 boards share that VID/PID, so a board that has never
+been a deck gets only the `hello`; if it doesn't answer within 10 seconds, the
+app leaves it alone until it's unplugged. Decks seen before are tried first. It reconnects automatically if the device is unplugged or reset.
 Buttons are defined only in the host config. The device sends just a button `id`,
 so it can't trigger anything that isn't in that file.
 

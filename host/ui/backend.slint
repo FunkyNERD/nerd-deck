@@ -75,6 +75,8 @@ export global Backend {
     callback start-service();
     callback stop-service();
     in property <bool> connected;
+    // The port of a device being asked whether it's a deck, or "".
+    in property <string> checking;
     in property <string> port;
     in property <string> serial;
     in property <string> firmware;

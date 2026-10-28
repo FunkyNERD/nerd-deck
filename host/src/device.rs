@@ -27,6 +27,11 @@ impl Port {
     pub fn serial(&self) -> Option<&str> {
         self.usb.as_ref()?.serial_number.as_deref()
     }
+
+    /// What tells this device apart: its serial number, else its port.
+    pub fn key(&self) -> &str {
+        self.serial().unwrap_or(&self.name)
+    }
 }
 
 /// The serial devices the kernel knows of, by name. Far cheaper than
@@ -43,6 +48,13 @@ pub fn serial_devices() -> Vec<String> {
 /// Resolve which serial port to use: the configured one, or the first USB
 /// port matching the configured VID/PID.
 pub fn find_port(cfg: &DeviceConfig) -> Result<Port> {
+    find_ports(cfg)?.into_iter().next().ok_or_else(|| anyhow!("no device with vid {:04x} found", cfg.vid))
+}
+
+/// The ports the deck may be on: the configured one, or every USB port
+/// matching the configured VID/PID. Other boards share Espressif's VID/PID,
+/// so only a hello tells a deck apart.
+pub fn find_ports(cfg: &DeviceConfig) -> Result<Vec<Port>> {
     let ports = serialport::available_ports()?;
     let usb = |p: &serialport::SerialPortInfo| match &p.port_type {
         SerialPortType::UsbPort(u) => Some(u.clone()),
@@ -50,16 +62,16 @@ pub fn find_port(cfg: &DeviceConfig) -> Result<Port> {
     };
     if let Some(name) = &cfg.port {
         let usb = ports.iter().find(|p| &p.port_name == name).and_then(usb);
-        return Ok(Port { name: name.clone(), usb });
+        return Ok(vec![Port { name: name.clone(), usb }]);
     }
-    ports
+    Ok(ports
         .iter()
-        .find_map(|p| {
+        .filter_map(|p| {
             let u = usb(p)?;
             (u.vid == cfg.vid && cfg.pid.is_none_or(|pid| pid == u.pid))
                 .then(|| Port { name: p.port_name.clone(), usb: Some(u) })
         })
-        .ok_or_else(|| anyhow!("no device with vid {:04x} found", cfg.vid))
+        .collect())
 }
 
 pub fn list_ports() -> Result<()> {

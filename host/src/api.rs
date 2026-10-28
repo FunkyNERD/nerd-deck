@@ -28,7 +28,11 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone, Default, PartialEq, SerializeDict, DeserializeDict, Type)]
 #[zvariant(signature = "dict")]
 pub struct Status {
+    /// A deck said hello on `port`.
     pub connected: bool,
+    /// The port of a device being asked whether it's a deck, until it says
+    /// hello or gives up; None otherwise, and from an older service.
+    pub checking: Option<String>,
     /// Serial port of the connected deck; empty when not connected.
     pub port: String,
     /// The deck's USB serial number (its chip's MAC); empty when not connected.

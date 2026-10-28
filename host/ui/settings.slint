@@ -213,19 +213,20 @@ export component SettingsWindow inherits Window {
                                 height: 8px;
                                 y: (parent.height - self.height) / 2;
                                 border-radius: 4px;
-                                background: Backend.connected ? Theme.green : Backend.flashing ? Theme.cyan : Theme.muted;
+                                background: Backend.connected ? Theme.green : Backend.flashing || Backend.checking != "" ? Theme.cyan : Theme.muted;
                             }
                             Text {
                                 text: !Backend.service-running ? "Service not running"
                                     : Backend.flashing ? "Updating firmware"
-                                    : Backend.connected ? "Deck connected" : "Waiting for the deck";
+                                    : Backend.connected ? "Deck connected"
+                                    : Backend.checking != "" ? "Checking a device" : "Waiting for the deck";
                                 font-size: 13px;
                                 font-weight: 600;
                                 color: Theme.text;
                             }
                         }
-                        if Backend.connected: Text {
-                            text: Backend.port + (Backend.firmware == "" ? "" : " · fw " + Backend.firmware);
+                        if Backend.connected || Backend.checking != "": Text {
+                            text: Backend.connected ? Backend.port + (Backend.firmware == "" ? "" : " · fw " + Backend.firmware) : Backend.checking;
                             font-size: 12px;
                             font-family: Theme.mono;
                             color: Theme.text-dim;

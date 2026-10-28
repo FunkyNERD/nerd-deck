@@ -144,6 +144,7 @@ export component DevicePage inherits VerticalLayout {
                     Text {
                         text: !Backend.service-running ? "Service not running"
                             : Backend.connected ? (Backend.board == "wt32-sc01-plus" || Backend.board == "" ? "WT32-SC01 Plus" : Backend.board)
+                            : Backend.checking != "" ? "Checking a device"
                             : "No deck connected";
                         font-size: 18px;
                         font-weight: 600;
@@ -151,6 +152,12 @@ export component DevicePage inherits VerticalLayout {
                         vertical-alignment: center;
                     }
                     if Backend.connected: Pill { text: "Connected"; }
+                    if Backend.checking != "": Pill {
+                        text: "Checking";
+                        fg: Theme.cyan;
+                        dot: Theme.cyan;
+                        background: Theme.selected;
+                    }
                     if Backend.flashing: Pill {
                         text: "Updating firmware";
                         fg: Theme.cyan;
@@ -162,7 +169,13 @@ export component DevicePage inherits VerticalLayout {
                     alignment: start;
                     ServiceButton { primary: true; }
                 }
-                if Backend.service-running && !Backend.connected && !Backend.flashing: Text {
+                if Backend.checking != "": Text {
+                    text: "Asking the device on " + Backend.checking + " whether it's a deck. Other ESP32 boards don't answer, and are left alone.";
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                    wrap: word-wrap;
+                }
+                if Backend.service-running && !Backend.connected && !Backend.flashing && Backend.checking == "": Text {
                     text: "Plug the deck in with a USB-C cable that carries data.";
                     font-size: 13px;
                     color: Theme.text-dim;
