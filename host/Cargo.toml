@@ -45,7 +45,7 @@ slint-build = "1.18.1"
 # Packaging: host/packaging/build-packages.sh runs `cargo deb` and
 # `cargo generate-rpm` with these. Both packages install the same files.
 [package.metadata.deb]
-maintainer = "Jamie Carl <jamie@hazaar.io>"
+maintainer = "Jamie Carl <jamie@hazaar.dev>"
 section = "utils"
 depends = "$auto"
 extended-description = """\
