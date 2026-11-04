@@ -11,7 +11,7 @@
 #endif
 
 // Bump together with PROTO_VERSION in host/src/protocol.rs.
-constexpr uint32_t kProtoVersion = 6;
+constexpr uint32_t kProtoVersion = 7;
 
 constexpr int kScreenWidth = 480;
 constexpr int kScreenHeight = 320;
@@ -31,6 +31,10 @@ constexpr size_t kSerialRxBuffer = 40 * 1024;
 constexpr size_t kMaxCores = 32;
 constexpr size_t kMaxDisks = 4;
 constexpr size_t kMaxButtons = 12;
+// A custom tab's panels, on a grid of at most kMaxPanelCols x kMaxPanelRows.
+constexpr size_t kMaxPanels = 12;
+constexpr uint8_t kMaxPanelCols = 4;
+constexpr uint8_t kMaxPanelRows = 3;
 
 // Button images: the host sizes them to fill a button's face (about 108x81,
 // reported in `hello`), or to 40x40 icons for older hosts.

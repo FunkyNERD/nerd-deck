@@ -11,12 +11,13 @@ import { DevicePage } from "pages/device.slint";
 import { ButtonsPage } from "pages/buttons.slint";
 import { StatsPage } from "pages/stats.slint";
 import { TabsPage } from "pages/tabs.slint";
+import { CustomTabsPage } from "pages/custom.slint";
 import { NotificationsPage } from "pages/notifications.slint";
 import { FirmwarePage } from "pages/firmware.slint";
 import { AboutPage } from "pages/about.slint";
 
 export { Backend }
-export { DeckButton, IconChoice, Swatch, DiskRow, TabRow, AppRow, KnownDeck } from "backend.slint";
+export { DeckButton, IconChoice, Swatch, DiskRow, TabRow, AppRow, KnownDeck, CustomTab, PanelCell } from "backend.slint";
 
 // Shown on every page while a newer nerd-deck release is out, until dismissed:
 // what's new in it, and the package to install, or how to update a source install.
@@ -156,8 +157,8 @@ export component SettingsWindow inherits Window {
 
     // The standard widgets (fields, menus, Slint's credit) follow the window's dark look.
     init => { Palette.color-scheme = ColorScheme.dark; }
-    property <[string]> titles: ["Device", "Buttons", "Stats", "Deck tabs", "Notifications", "Firmware & updates", "About"];
-    property <[string]> glyphs: [Glyphs.desktop, Glyphs.grid, Glyphs.chart, Glyphs.tabs, Glyphs.bell, Glyphs.chip, Glyphs.info];
+    property <[string]> titles: ["Device", "Buttons", "Stats", "Deck tabs", "Custom tabs", "Notifications", "Firmware & updates", "About"];
+    property <[string]> glyphs: [Glyphs.desktop, Glyphs.grid, Glyphs.chart, Glyphs.tabs, Glyphs.panels, Glyphs.bell, Glyphs.chip, Glyphs.info];
 
     HorizontalLayout {
         // Sidebar
@@ -311,20 +312,22 @@ export component SettingsWindow inherits Window {
                 content-height: p3.preferred-height;
                 p3 := TabsPage { width: s3.visible-width; }
             }
-            if root.page == 4: s4 := ScrollView {
-                content-width: self.visible-width;
-                content-height: p4.preferred-height;
-                p4 := NotificationsPage { width: s4.visible-width; }
-            }
+            // Like the button editor, it fits the window.
+            if root.page == 4: CustomTabsPage { vertical-stretch: 1; }
             if root.page == 5: s5 := ScrollView {
                 content-width: self.visible-width;
                 content-height: p5.preferred-height;
-                p5 := FirmwarePage { width: s5.visible-width; }
+                p5 := NotificationsPage { width: s5.visible-width; }
             }
             if root.page == 6: s6 := ScrollView {
                 content-width: self.visible-width;
                 content-height: p6.preferred-height;
-                p6 := AboutPage { width: s6.visible-width; }
+                p6 := FirmwarePage { width: s6.visible-width; }
+            }
+            if root.page == 7: s7 := ScrollView {
+                content-width: self.visible-width;
+                content-height: p7.preferred-height;
+                p7 := AboutPage { width: s7.visible-width; }
             }
         }
     }

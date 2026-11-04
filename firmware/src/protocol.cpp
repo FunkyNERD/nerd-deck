@@ -36,9 +36,12 @@ void send(const JsonDocument& doc) {
 // The stored settings, as the host's `display` message names them.
 void writeDisplay(JsonObject o, const settings::Display& d) {
     using namespace settings;
+    // Free custom slots are left out.
     JsonArray tabs = o["tabs"].to<JsonArray>();
-    for (uint8_t t : d.tabs) tabs.add(kTabIds[t]);
-    o["start"] = d.start == kStartFirst ? "first" : kTabIds[d.start];
+    for (uint8_t t : d.tabs)
+        if (const char* name = tabName(d, t)) tabs.add(name);
+    const char* start = d.start == kStartFirst ? nullptr : tabName(d, d.start);
+    o["start"] = start ? start : "first";
     o["brightness"] = d.brightness;
     o["dim_after"] = d.dimAfterS;
     o["off_after"] = d.offAfterS;
@@ -46,8 +49,10 @@ void writeDisplay(JsonObject o, const settings::Display& d) {
     o["temp_hot"] = d.tempHot;
     o["flip"] = d.flip;
     JsonArray hidden = o["hidden"].to<JsonArray>();
-    for (uint8_t t = 0; t < kTabCount; t++)
-        if (d.hidden & (1u << t)) hidden.add(kTabIds[t]);
+    for (uint8_t t = 0; t < kTabCount; t++) {
+        const char* name = tabName(d, t);
+        if (name && d.hidden & (1u << t)) hidden.add(name);
+    }
 }
 
 void sendDisplay(const settings::Display& d) {
@@ -205,7 +210,7 @@ void handleDisplay(JsonObjectConst o) {
         bool placed[kTabCount] = {};
         uint8_t n = 0;
         for (const char* id : tabs) {
-            const int8_t t = id ? tabFromName(id) : -1;
+            const int8_t t = tabFromName(d, id);
             if (t < 0 || placed[t] || n == kTabCount) continue;
             placed[t] = true;
             d.tabs[n++] = static_cast<uint8_t>(t);
@@ -216,15 +221,17 @@ void handleDisplay(JsonObjectConst o) {
     // Ignored if it would turn every tab off.
     JsonArrayConst hidden = o["hidden"];
     if (!hidden.isNull()) {
-        uint8_t mask = 0;
+        uint8_t mask = 0, named = 0;
+        for (uint8_t t = 0; t < kTabCount; t++)
+            if (tabName(d, t)) named |= 1u << t;
         for (const char* id : hidden) {
-            const int8_t t = id ? tabFromName(id) : -1;
+            const int8_t t = tabFromName(d, id);
             if (t >= 0) mask |= 1u << t;
         }
-        if (mask != kAllTabs) d.hidden = mask;
+        if (mask != named) d.hidden = mask;
     }
     if (const char* start = o["start"]) {
-        const int8_t t = tabFromName(start);
+        const int8_t t = tabFromName(d, start);
         d.start = t >= 0 ? t : kStartFirst;
     }
     if (o["brightness"].is<int>()) d.brightness = constrain(o["brightness"].as<int>(), 5, 100);
@@ -242,6 +249,59 @@ void handleDisplay(JsonObjectConst o) {
     save(d);
     ui::applyDisplay(d);
     sendDisplay(d);
+}
+
+// The host's custom tabs, by id (v7). Each gets a slot, kept across restarts
+// with its place and on/off, and the reply says where they are.
+void handleTabs(JsonObjectConst o) {
+    using namespace settings;
+    const char* ids[kCustomTabs];
+    uint8_t count = 0;
+    for (const char* id : o["ids"].as<JsonArrayConst>()) {
+        if (count == kCustomTabs) break;
+        // Not a built-in name, nor too long to keep.
+        if (!id || !*id || strlen(id) >= kCustomIdLen) continue;
+        bool builtin = false;
+        for (const char* b : kTabIds) builtin |= strcmp(id, b) == 0;
+        if (!builtin) ids[count++] = id;
+    }
+    Display d = load();
+    if (assignCustom(d, ids, count)) save(d);
+    ui::applyDisplay(d);
+    ui::setCustomTabs(ids, count);
+    sendDisplay(d);
+}
+
+// One custom tab's name, icon, grid and panels (v7).
+void handleTab(JsonObjectConst o) {
+    static ui::PanelDef panels[kMaxPanels];
+    size_t count = 0;
+    for (JsonObjectConst p : o["panels"].as<JsonArrayConst>()) {
+        if (count == kMaxPanels) break;
+        ui::PanelDef& def = panels[count++];
+        const char* style = p["style"] | "value";
+        def.style = strcmp(style, "status") == 0 ? ui::PanelStyle::Status
+                    : strcmp(style, "text") == 0 ? ui::PanelStyle::Text
+                                                 : ui::PanelStyle::Value;
+        strlcpy(def.title, p["title"] | "", sizeof def.title);
+        def.col = p["at"][0] | 0u;
+        def.row = p["at"][1] | 0u;
+        def.colSpan = p["span"][0] | 1u;
+        def.rowSpan = p["span"][1] | 1u;
+    }
+    ui::setCustomTab(o["id"] | "", o["name"] | "", o["icon"] | "", o["grid"][0] | 1u, o["grid"][1] | 1u, panels,
+                     count);
+}
+
+// A custom tab's panel has something new to show (v7).
+void handlePanel(JsonObjectConst o) {
+    const char* state = o["state"] | "";
+    const ui::PanelState s = strcmp(state, "ok") == 0     ? ui::PanelState::Ok
+                             : strcmp(state, "warn") == 0  ? ui::PanelState::Warn
+                             : strcmp(state, "err") == 0   ? ui::PanelState::Err
+                             : strcmp(state, "stale") == 0 ? ui::PanelState::Stale
+                                                           : ui::PanelState::None;
+    ui::setPanel(o["tab"] | "", o["i"] | 0u, o["text"] | "", o["sub"] | "", s);
 }
 
 void handleLine(const char* line, size_t len) {
@@ -267,6 +327,12 @@ void handleLine(const char* line, size_t len) {
         handleDisplay(o);
     } else if (strcmp(type, "notification") == 0) {
         handleNotification(o);
+    } else if (strcmp(type, "panel") == 0) {
+        handlePanel(o);
+    } else if (strcmp(type, "tab") == 0) {
+        handleTab(o);
+    } else if (strcmp(type, "tabs") == 0) {
+        handleTabs(o);
     } else if (strcmp(type, "hello") == 0) {
         sendHello();
     }

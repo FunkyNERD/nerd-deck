@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump together with `kProtoVersion` in firmware/src/config.hpp.
-pub const PROTO_VERSION: u32 = 6;
+pub const PROTO_VERSION: u32 = 7;
+
+/// The first protocol with custom tabs.
+pub const PROTO_CUSTOM_TABS: u32 = 7;
 
 /// Messages the host sends to the device.
 #[derive(Debug, Serialize)]
@@ -48,6 +51,21 @@ pub enum HostMsg {
         /// firmware 0.9.0; older firmware waits 3 s.
         #[serde(skip_serializing_if = "Option::is_none")]
         stats_ms: Option<u64>,
+    },
+    /// The custom tabs, by id; a `Tab` for each follows. Tabs the deck had
+    /// that aren't here go. Added in v7.
+    Tabs {
+        ids: Vec<String>,
+    },
+    /// One custom tab's look and panels. Added in v7.
+    Tab(TabDef),
+    /// What one of a custom tab's panels shows. Added in v7.
+    Panel {
+        tab: String,
+        /// The panel's place in its tab's `panels`.
+        i: usize,
+        #[serde(flatten)]
+        value: PanelValue,
     },
     /// One chunk of a button image. Sent after `Buttons`, in order, for each
     /// button with `image: true`.
@@ -99,6 +117,41 @@ pub enum DeviceMsg {
 /// order.
 pub const TABS: [&str; 5] = ["system", "network", "storage", "battery", "controls"];
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TabDef {
+    pub id: String,
+    pub name: String,
+    /// A built-in LVGL symbol glyph, sent as text.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    /// Columns and rows.
+    pub grid: [u8; 2],
+    pub panels: Vec<PanelDef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PanelDef {
+    /// How the deck draws it: "value", "status" or "text".
+    pub style: &'static str,
+    pub title: String,
+    /// Its top-left cell, column then row.
+    pub at: [u8; 2],
+    pub span: [u8; 2],
+}
+
+/// A panel's content.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct PanelValue {
+    pub text: String,
+    /// A note under the value.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub sub: String,
+    /// "ok", "warn", "err", or "stale" (couldn't be refreshed); left out for
+    /// nothing in particular.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<&'static str>,
+}
+
 /// The settings a deck keeps in its flash, so they apply from power-on. Each
 /// deck has its own: it reports them, and the host only changes them when
 /// asked to.
@@ -143,16 +196,26 @@ impl Default for DisplaySettings {
 }
 
 impl DisplaySettings {
-    /// Every tab, in this order.
-    pub fn tab_order(&self) -> Vec<&'static str> {
-        let mut order: Vec<&'static str> =
-            self.tabs.iter().filter_map(|t| TABS.iter().find(|n| **n == t.as_str()).copied()).collect();
+    /// Every tab, in this order: the deck's custom tabs among them.
+    pub fn tab_order(&self) -> Vec<&str> {
+        let mut order: Vec<&str> = Vec::new();
+        for t in &self.tabs {
+            if !order.contains(&t.as_str()) {
+                order.push(t);
+            }
+        }
         for t in TABS {
             if !order.contains(&t) {
                 order.push(t);
             }
         }
         order
+    }
+
+    /// Whether `tab` is one of the deck's: a built-in tab, or a custom one it
+    /// lists.
+    pub fn has_tab(&self, tab: &str) -> bool {
+        TABS.contains(&tab) || self.tabs.iter().any(|t| t == tab)
     }
 
     /// Whether the deck shows `tab`, as far as its settings go (Battery also
@@ -181,10 +244,10 @@ impl DisplaySettings {
         use anyhow::ensure;
         ensure!((5..=100).contains(&self.brightness), "brightness must be 5-100, not {}", self.brightness);
         ensure!(
-            self.start == "first" || TABS.contains(&self.start.as_str()),
+            self.start == "first" || self.has_tab(&self.start),
             "start {:?} isn't \"first\" or a tab: {}",
             self.start,
-            TABS.join(", ")
+            self.tab_order().join(", ")
         );
         ensure!(
             (30..=120).contains(&self.temp_warm) && (30..=120).contains(&self.temp_hot),
@@ -196,16 +259,16 @@ impl DisplaySettings {
             self.temp_warm,
             self.temp_hot
         );
+        // Names besides the built-in ones are the deck's custom tabs.
         let mut seen = std::collections::HashSet::new();
         for t in &self.tabs {
-            ensure!(TABS.contains(&t.as_str()), "unknown tab {t:?}; the tabs are {}", TABS.join(", "));
             ensure!(seen.insert(t), "tabs lists {t:?} twice");
         }
         if let Some(hidden) = &self.hidden {
             for t in hidden {
-                ensure!(TABS.contains(&t.as_str()), "unknown tab {t:?}; the tabs are {}", TABS.join(", "));
+                ensure!(self.has_tab(t), "unknown tab {t:?}; the tabs are {}", self.tab_order().join(", "));
             }
-            ensure!(TABS.iter().any(|t| self.shows(t)), "at least one tab has to stay on");
+            ensure!(self.tab_order().iter().any(|t| self.shows(t)), "at least one tab has to stay on");
         }
         Ok(())
     }
@@ -461,6 +524,30 @@ mod tests {
     }
 
     #[test]
+    fn custom_tab_msgs() {
+        let msg = HostMsg::Panel {
+            tab: "infra".into(),
+            i: 2,
+            value: PanelValue { text: "200".into(), sub: "84 ms".into(), state: Some("ok") },
+        };
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"type":"panel","tab":"infra","i":2,"text":"200","sub":"84 ms","state":"ok"}"#
+        );
+        let msg = HostMsg::Tab(TabDef {
+            id: "infra".into(),
+            name: "Infra".into(),
+            icon: String::new(),
+            grid: [2, 1],
+            panels: vec![PanelDef { style: "status", title: "Git".into(), at: [0, 0], span: [1, 1] }],
+        });
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"type":"tab","id":"infra","name":"Infra","grid":[2,1],"panels":[{"style":"status","title":"Git","at":[0,0],"span":[1,1]}]}"#
+        );
+    }
+
+    #[test]
     fn stats_leave_out_turned_off_tabs() {
         let json = serde_json::to_string(&Stats { host: "pc".into(), ..Default::default() }).unwrap();
         assert_eq!(json, r#"{"host":"pc","uptime":0}"#);
@@ -485,6 +572,13 @@ mod tests {
         assert!(bad(DisplayChange { temp_warm: Some(90), ..Default::default() }));
         assert!(bad(DisplayChange { tabs: Some(vec!["system".into(), "system".into()]), ..Default::default() }));
         assert!(bad(DisplayChange { hidden: Some(vec!["nope".into()]), ..Default::default() }));
+
+        // A deck's custom tabs come in its own `tabs`.
+        let mut d = DisplaySettings::default();
+        d.tabs.insert(1, "infra".into());
+        assert_eq!(d.tab_order(), ["system", "infra", "network", "storage", "battery", "controls"]);
+        d.apply(&DisplayChange { hidden: Some(vec!["infra".into()]), start: Some("infra".into()), ..Default::default() });
+        assert!(d.validate().is_ok() && !d.shows("infra"));
         let all = TABS.iter().map(|t| (*t).to_owned()).collect();
         assert!(bad(DisplayChange { hidden: Some(all), ..Default::default() }));
         assert!(serde_json::from_str::<DisplayChange>(r#"{"stats_ms":5}"#).is_err());

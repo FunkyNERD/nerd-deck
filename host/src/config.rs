@@ -16,6 +16,17 @@ pub const MIN_INTERVAL_MS: u64 = 100;
 pub const MAX_BUTTONS: usize = 12;
 pub const MAX_ID_LEN: usize = 23;
 pub const MAX_LABEL_LEN: usize = 31;
+pub const MAX_TABS: usize = 3;
+pub const MAX_TAB_ID_LEN: usize = 15;
+pub const MAX_TAB_NAME_LEN: usize = 15;
+pub const MAX_PANELS: usize = 12;
+pub const MAX_PANEL_TITLE_LEN: usize = 23;
+pub const MAX_GRID: [u8; 2] = [4, 3];
+
+/// The shortest refresh, in seconds, for panels that ask a web server, and
+/// for commands: short enough to watch something, long enough not to hammer it.
+pub const MIN_URL_INTERVAL: u64 = 5;
+pub const MIN_COMMAND_INTERVAL: u64 = 1;
 
 /// Written to the default location on first start, so there's a commented
 /// config to edit.
@@ -34,6 +45,9 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     #[serde(rename = "button")]
     pub buttons: Vec<ButtonConfig>,
+    /// Custom tabs of panels (protocol v7).
+    #[serde(rename = "tab")]
+    pub tabs: Vec<TabConfig>,
 }
 
 #[derive(Debug, PartialEq, Deserialize)]
@@ -147,6 +161,140 @@ pub struct ButtonConfig {
     pub color: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TabConfig {
+    /// 1-15 letters, digits, `-` or `_`; not a built-in tab's name.
+    pub id: String,
+    /// On the deck's header pill.
+    pub name: String,
+    /// A built-in symbol name, as for buttons; "list" when unset.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Columns and rows, up to 4 x 3.
+    #[serde(default = "default_grid")]
+    pub grid: [u8; 2],
+    /// Seconds between refreshes, for panels that don't set their own.
+    #[serde(default = "default_tab_interval")]
+    pub interval: u64,
+    #[serde(rename = "panel", default)]
+    pub panels: Vec<PanelConfig>,
+}
+
+fn default_grid() -> [u8; 2] {
+    [2, 2]
+}
+
+fn default_tab_interval() -> u64 {
+    60
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelKind {
+    /// A value from a web page or API: its first line, or `json` in it.
+    Url,
+    /// Whether a URL answers, its status and how fast.
+    Status,
+    /// The first line a command prints.
+    Command,
+    /// Text of your own.
+    Text,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelConfig {
+    pub kind: PanelKind,
+    #[serde(default)]
+    pub title: String,
+    /// For `url` and `status`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// For `url`: a JSON Pointer (RFC 6901) to the value, like "/data/0/price".
+    #[serde(default)]
+    pub json: Option<String>,
+    /// For `url`: a JSON Pointer to a note shown under the value.
+    #[serde(default)]
+    pub sub_json: Option<String>,
+    /// Sent with the request, say for an API key. Never sent to the deck.
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// For `command`: run with `sh -c`, like a button's.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// For `text`.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// After the value, like "%" or " C".
+    #[serde(default)]
+    pub unit: String,
+    /// Digits after the point for a number.
+    #[serde(default)]
+    pub decimals: Option<u8>,
+    /// A number from `warn` shows orange, and from `crit` red. Below them when
+    /// `crit` is the lower.
+    #[serde(default)]
+    pub warn: Option<f64>,
+    #[serde(default)]
+    pub crit: Option<f64>,
+    /// For `status`: slower than this many milliseconds shows orange.
+    #[serde(default = "default_slow_ms")]
+    pub slow_ms: u64,
+    /// Seconds between refreshes; the tab's when unset.
+    #[serde(default)]
+    pub interval: Option<u64>,
+    /// Seconds to wait for an answer.
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+    /// Columns and rows it covers.
+    #[serde(default = "default_span")]
+    pub span: [u8; 2],
+}
+
+fn default_slow_ms() -> u64 {
+    1000
+}
+
+fn default_timeout() -> u64 {
+    10
+}
+
+fn default_span() -> [u8; 2] {
+    [1, 1]
+}
+
+impl TabConfig {
+    /// Each panel's top-left cell: in order, each in the first place it fits,
+    /// row by row. None when one doesn't fit.
+    pub fn layout(&self) -> Option<Vec<[u8; 2]>> {
+        let [cols, rows] = self.grid;
+        let mut used = vec![false; cols as usize * rows as usize];
+        let mut at = Vec::new();
+        for p in &self.panels {
+            let [w, h] = p.span;
+            let spot = (0..rows).flat_map(|r| (0..cols).map(move |c| (c, r))).find(|&(c, r)| {
+                c + w <= cols
+                    && r + h <= rows
+                    && (r..r + h).all(|y| (c..c + w).all(|x| !used[y as usize * cols as usize + x as usize]))
+            })?;
+            for y in spot.1..spot.1 + h {
+                for x in spot.0..spot.0 + w {
+                    used[y as usize * cols as usize + x as usize] = true;
+                }
+            }
+            at.push([spot.0, spot.1]);
+        }
+        Some(at)
+    }
+}
+
+impl PanelConfig {
+    pub fn interval(&self, tab: &TabConfig) -> u64 {
+        self.interval.unwrap_or(tab.interval)
+    }
+}
+
 /// "#RRGGBB" (or "RRGGBB") as 0xRRGGBB.
 pub fn parse_color(s: &str) -> Option<u32> {
     let hex = s.strip_prefix('#').unwrap_or(s);
@@ -234,6 +382,71 @@ impl Config {
                 );
             }
         }
+        self.validate_tabs()
+    }
+
+    fn validate_tabs(&self) -> Result<()> {
+        use crate::protocol::TABS;
+        ensure!(self.tabs.len() <= MAX_TABS, "{} tabs configured; the deck has room for {MAX_TABS}", self.tabs.len());
+        let mut seen = std::collections::HashSet::new();
+        for t in &self.tabs {
+            ensure!(
+                !t.id.is_empty()
+                    && t.id.len() <= MAX_TAB_ID_LEN
+                    && t.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "tab id {:?} must be 1-{MAX_TAB_ID_LEN} letters, digits, - or _",
+                t.id
+            );
+            ensure!(!TABS.contains(&t.id.as_str()), "tab id {:?} is a built-in tab's", t.id);
+            ensure!(seen.insert(&t.id), "duplicate tab id {:?}", t.id);
+            ensure!(
+                !t.name.is_empty() && t.name.len() <= MAX_TAB_NAME_LEN,
+                "tab {:?}: name must be 1-{MAX_TAB_NAME_LEN} bytes",
+                t.id
+            );
+            if let Some(icon) = &t.icon {
+                ensure!(icons::lookup(icon).is_some(), "tab {:?}: unknown icon {icon:?}", t.id);
+            }
+            let [cols, rows] = t.grid;
+            ensure!(
+                (1..=MAX_GRID[0]).contains(&cols) && (1..=MAX_GRID[1]).contains(&rows),
+                "tab {:?}: grid must be 1-{} columns by 1-{} rows",
+                t.id,
+                MAX_GRID[0],
+                MAX_GRID[1]
+            );
+            ensure!(t.panels.len() <= MAX_PANELS, "tab {:?}: at most {MAX_PANELS} panels", t.id);
+            for (i, p) in t.panels.iter().enumerate() {
+                let which = format!("tab {:?} panel {} ({:?})", t.id, i + 1, p.title);
+                ensure!(p.title.len() <= MAX_PANEL_TITLE_LEN, "{which}: title must be at most {MAX_PANEL_TITLE_LEN} bytes");
+                ensure!(p.span[0] >= 1 && p.span[1] >= 1, "{which}: span must be at least [1, 1]");
+                let needs = |field: &Option<String>, name: &str| {
+                    ensure!(field.as_deref().is_some_and(|v| !v.is_empty()), "{which}: a {:?} panel needs {name}", p.kind);
+                    Ok(())
+                };
+                let floor = match p.kind {
+                    PanelKind::Url | PanelKind::Status => {
+                        needs(&p.url, "a url")?;
+                        MIN_URL_INTERVAL
+                    }
+                    PanelKind::Command => {
+                        needs(&p.command, "a command")?;
+                        MIN_COMMAND_INTERVAL
+                    }
+                    PanelKind::Text => {
+                        needs(&p.text, "its text")?;
+                        0
+                    }
+                };
+                let interval = p.interval(t);
+                ensure!(interval >= floor, "{which}: interval is {interval} s; the shortest is {floor}");
+                ensure!((1..=60).contains(&p.timeout), "{which}: timeout must be 1-60 seconds");
+                for pointer in [&p.json, &p.sub_json].into_iter().flatten() {
+                    ensure!(pointer.starts_with('/'), "{which}: {pointer:?} isn't a JSON Pointer like \"/data/price\"");
+                }
+            }
+            ensure!(t.layout().is_some(), "tab {:?}: its panels don't fit its {cols}x{rows} grid", t.id);
+        }
         Ok(())
     }
 
@@ -317,6 +530,36 @@ mod tests {
     fn old_display_settings_are_ignored() {
         let cfg = parse("[display]\nbrightness = 2\nflip = true").unwrap();
         assert!(cfg.old_display.is_some());
+    }
+
+    #[test]
+    fn lays_out_tabs() {
+        let cfg = parse(
+            "[[tab]]\nid='t'\nname='T'\ngrid=[2,2]\n\
+             [[tab.panel]]\nkind='text'\ntext='a'\nspan=[2,1]\n\
+             [[tab.panel]]\nkind='text'\ntext='b'\n\
+             [[tab.panel]]\nkind='text'\ntext='c'",
+        )
+        .unwrap();
+        assert_eq!(cfg.tabs[0].layout().unwrap(), [[0, 0], [0, 1], [1, 1]]);
+
+        let full = "[[tab]]\nid='t'\nname='T'\ngrid=[1,1]\n[[tab.panel]]\nkind='text'\ntext='a'\n";
+        assert!(parse(full).is_ok());
+        let err = parse(&format!("{full}[[tab.panel]]\nkind='text'\ntext='b'")).unwrap_err();
+        assert!(err.to_string().contains("don't fit"));
+    }
+
+    #[test]
+    fn rejects_bad_tabs() {
+        let tab = |extra: &str| parse(&format!("[[tab]]\nid='t'\nname='T'\n{extra}"));
+        assert!(tab("").is_ok());
+        assert!(parse("[[tab]]\nid='system'\nname='S'").is_err());
+        assert!(tab("grid=[5,1]").is_err());
+        assert!(tab("[[tab.panel]]\nkind='url'").is_err());
+        let err = tab("[[tab.panel]]\nkind='url'\nurl='http://x'\ninterval=1").unwrap_err();
+        assert!(err.to_string().contains("shortest is 5"));
+        assert!(tab("[[tab.panel]]\nkind='command'\ncommand='date'\ninterval=1").is_ok());
+        assert!(tab("[[tab.panel]]\nkind='url'\nurl='http://x'\njson='price'").is_err());
     }
 
     #[test]

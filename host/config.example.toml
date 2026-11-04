@@ -83,3 +83,53 @@ id = "suspend"
 label = "Suspend"
 command = "systemctl suspend"
 icon = "power"
+
+# Custom tabs: up to 3, each a grid of panels that show what a web page, an
+# API or a command says. They join the deck's tabs, and the settings window
+# orders them and turns them on and off like the others. A panel is only
+# refreshed while its tab is on, at its own interval, whatever the stats
+# interval.
+#
+#   [[tab]]
+#   id = "infra"            # 1-15 letters, digits, - or _
+#   name = "Infra"          # on the deck's header, up to 15 bytes
+#   icon = "list"           # a symbol name, as for buttons
+#   grid = [2, 2]           # columns x rows, up to 4 x 3; panels fill it in order
+#   interval = 60           # seconds between refreshes, for each panel
+#
+# Each panel has a kind:
+#   url     = a value from a web page or API: its first line, or `json`, a
+#             JSON Pointer into it ("/data/0/price"); `sub_json` points at a
+#             note shown under it. `headers` go with the request (API keys).
+#   status  = whether `url` answers: its status code and how fast, green, or
+#             orange slower than `slow_ms` (1000), or red.
+#   command = the first line a command prints (`sh -c`, like a button's).
+#   text    = `text`, as it is.
+# and can set: title, span = [columns, rows], interval (at least 5 s for url
+# and status, 1 s for command), timeout (seconds, 10), and for numbers: unit
+# ("%"), decimals, and warn / crit, from which it shows orange / red (below
+# them when crit is the lower).
+#
+#   [[tab.panel]]
+#   kind = "status"
+#   title = "Git"
+#   url = "https://git.example.com"
+#   interval = 30
+#
+#   [[tab.panel]]
+#   kind = "command"
+#   title = "Load"
+#   command = "cut -d' ' -f1 /proc/loadavg"
+#   decimals = 2
+#   warn = 4.0
+#   crit = 8.0
+#   interval = 5
+#
+#   [[tab.panel]]
+#   kind = "url"
+#   title = "Bitcoin"
+#   url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+#   json = "/data/amount"
+#   unit = " USD"
+#   decimals = 0
+#   span = [2, 1]

@@ -44,16 +44,19 @@ const lv_color_t kRxColor = lv_color_hex(kCyan);
 const lv_color_t kTxColor = lv_color_hex(kOrange);
 
 // Header: one pill per tab, icon only but for the open tab's, which also
-// shows its name. Tabs turned off are left out, and so is Battery on hosts
-// without a battery.
-enum Tab : uint8_t { kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls, kTabCount };
-constexpr const char* kTabIcons[kTabCount] = {"" /* the logo, drawn */, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
-                                              LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
-// An open tab's icon colour. System's is the logo's three (kStripe).
-constexpr uint32_t kTabColors[kTabCount] = {kCyan, kCyan, kOrange, kGreen, 0x42A5F5};
-constexpr const char* kTabNames[kTabCount] = {"System", "Network", "Storage", "Battery", "Controls"};
+// shows its name. Tabs turned off are left out, and so are Battery on hosts
+// without a battery and custom tabs the host hasn't sent.
+enum Tab : uint8_t { kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls, kBuiltinCount };
+static_assert(kBuiltinCount == settings::kBuiltinTabs, "Tab follows settings::kTabIds");
+// Then the custom tabs' slots.
+constexpr uint8_t kTabCount = settings::kTabCount;
+constexpr uint8_t kCustomCount = settings::kCustomTabs;
+constexpr const char* kTabIcons[kBuiltinCount] = {"" /* the logo, drawn */, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
+                                                  LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
+// An open tab's icon colour. System's is the logo's three (kStripe); a custom tab's is cyan.
+constexpr uint32_t kTabColors[kBuiltinCount] = {kCyan, kCyan, kOrange, kGreen, 0x42A5F5};
+constexpr const char* kTabNames[kBuiltinCount] = {"System", "Network", "Storage", "Battery", "Controls"};
 lv_obj_t* tabview;
-static_assert(kTabCount == settings::kTabCount, "Tab follows settings::kTabIds");
 lv_obj_t* tabPages[kTabCount];
 lv_obj_t* tabPills[kTabCount];
 lv_obj_t* tabPillIcons[kTabCount];
@@ -63,14 +66,44 @@ lv_obj_t* logoBars[3];
 uint16_t currentTab = kTabSystem;
 bool hasBattery = false;
 // The tab order as set, and the tabs turned off (a bit each).
-uint8_t tabOrder[kTabCount] = {kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls};
+static_assert(kTabCount == 8, "the tab arrays below list every tab");
+uint8_t tabOrder[kTabCount] = {0, 1, 2, 3, 4, 5, 6, 7};
 uint8_t hiddenTabs = 0;
 // The tab at each position, and each tab's position: the tabview's pages and
 // the header's pills are both kept in this order, so swipes follow it. The
 // shown tabs come first, in tabOrder; the rest follow, hidden, so a swipe
 // never reaches them.
-uint8_t tabAt[kTabCount] = {kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls};
-uint8_t tabPos[kTabCount] = {0, 1, 2, 3, 4};
+uint8_t tabAt[kTabCount] = {0, 1, 2, 3, 4, 5, 6, 7};
+uint8_t tabPos[kTabCount] = {0, 1, 2, 3, 4, 5, 6, 7};
+// With more tabs than this shown, the pills narrow; with more than
+// kHeaderNamesMax, even the open one leaves out its name, so the header
+// still clears the battery reading.
+constexpr uint8_t kHeaderRoomy = 5;
+constexpr uint8_t kHeaderNamesMax = 7;
+bool headerNames = true;
+
+// Custom tabs (v7): each slot's id, from the settings, and whether the host
+// has sent that tab this session.
+char customIds[kCustomCount][settings::kCustomIdLen];
+bool customPresent[kCustomCount];
+struct Panel {
+    PanelStyle style;
+    lv_obj_t* card;
+    lv_obj_t* title;
+    lv_obj_t* value;
+    lv_obj_t* sub;
+    lv_obj_t* dot;  // status only
+    // The card's room for text, inside its padding.
+    lv_coord_t w, h;
+};
+struct CustomTab {
+    // Grid descriptors: LVGL keeps pointers to them.
+    lv_coord_t cols[kMaxPanelCols + 1];
+    lv_coord_t rows[kMaxPanelRows + 1];
+    Panel panels[kMaxPanels];
+    size_t panelCount;
+};
+CustomTab customTabs[kCustomCount];
 int8_t startTab = settings::kStartFirst;
 // Once someone picks a tab, the start tab no longer moves them.
 bool userNavigated = false;
@@ -350,9 +383,10 @@ void styleTabPills() {
             for (size_t b = 0; b < 3; b++)
                 lv_obj_set_style_bg_color(logoBars[b], lv_color_hex(open ? kStripe[b] : kTextFaint), 0);
         } else {
-            lv_obj_set_style_text_color(tabPillIcons[i], lv_color_hex(open ? kTabColors[i] : kTextFaint), 0);
+            const uint32_t color = i < kBuiltinCount ? kTabColors[i] : kCyan;
+            lv_obj_set_style_text_color(tabPillIcons[i], lv_color_hex(open ? color : kTextFaint), 0);
         }
-        if (open) lv_obj_clear_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
+        if (open && headerNames) lv_obj_clear_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(tabPillNames[i], LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -363,8 +397,12 @@ void openTab(uint16_t tab, lv_anim_enable_t anim) {
     styleTabPills();
 }
 
-// Turned on, and for Battery, the host has one.
-bool shown(uint8_t tab) { return !(hiddenTabs & (1u << tab)) && (tab != kTabBattery || hasBattery); }
+// Turned on, and for Battery, the host has one; for a custom tab, the host sent it.
+bool shown(uint8_t tab) {
+    if (hiddenTabs & (1u << tab)) return false;
+    if (tab >= kBuiltinCount) return customPresent[tab - kBuiltinCount];
+    return tab != kTabBattery || hasBattery;
+}
 
 // Turned off: its page isn't drawn, so its stats needn't be either.
 bool turnedOff(uint8_t tab) { return hiddenTabs & (1u << tab); }
@@ -404,11 +442,15 @@ void arrangeTabs() {
     const uint8_t shownCount = n;
     for (uint8_t t : tabOrder)
         if (!on(t)) tabAt[n++] = t;
+    const bool roomy = shownCount <= kHeaderRoomy;
+    headerNames = shownCount <= kHeaderNamesMax;
     for (uint8_t pos = 0; pos < kTabCount; pos++) {
         const uint8_t t = tabAt[pos];
         tabPos[t] = pos;
         lv_obj_move_to_index(tabPages[t], pos);
         lv_obj_move_to_index(tabPills[t], pos);
+        lv_obj_set_style_min_width(tabPills[t], roomy ? 52 : 40, 0);
+        lv_obj_set_style_pad_hor(tabPills[t], roomy ? 14 : 9, 0);
         if (pos < shownCount) {
             lv_obj_clear_flag(tabPages[t], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(tabPills[t], LV_OBJ_FLAG_HIDDEN);
@@ -491,6 +533,12 @@ void buildHeader() {
         lv_obj_set_ext_click_area(pill, 5);  // the header's full height
         lv_obj_add_event_cb(pill, onTabPill, LV_EVENT_CLICKED, reinterpret_cast<void*>(static_cast<uintptr_t>(i)));
         tabPills[i] = pill;
+        if (i >= kBuiltinCount) {
+            // A custom tab's icon and name come with it.
+            tabPillIcons[i] = makeLabel(pill, &lv_font_montserrat_16, kTextFaint, LV_SYMBOL_LIST);
+            tabPillNames[i] = makeLabel(pill, &lv_font_montserrat_14, kText, "");
+            continue;
+        }
         if (i == kTabSystem) {
             // The logo's proportions: bars 30, 56 and 40 tall, 14 wide, 6 apart.
             lv_obj_t* logo = lv_obj_create(pill);
@@ -1729,10 +1777,10 @@ void init() {
     lv_obj_set_style_bg_opa(tabview, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
 
-    // In Tab order.
+    // In Tab order, then the custom slots.
     lv_obj_t** tabs = tabPages;
     for (uint16_t i = 0; i < kTabCount; i++) {
-        tabs[i] = lv_tabview_add_tab(tabview, kTabNames[i]);
+        tabs[i] = lv_tabview_add_tab(tabview, i < kBuiltinCount ? kTabNames[i] : "");
         lv_obj_set_style_pad_all(tabs[i], kGap, 0);
         lv_obj_set_style_pad_top(tabs[i], kHeaderH + 3, 0);
     }
@@ -1742,6 +1790,7 @@ void init() {
     buildStorageTab(tabs[kTabStorage]);
     buildBatteryTab(tabs[kTabBattery]);
     buildControlsTab(tabs[kTabControls]);
+    for (uint8_t i = kBuiltinCount; i < kTabCount; i++) noScroll(tabs[i]);
     buildOverlays();
     buildPower();
     arrangeTabs();  // Battery stays hidden until the host reports one
@@ -1756,6 +1805,7 @@ void applyDisplay(const settings::Display& d) {
     display::setFlipped(d.flip);
     memcpy(tabOrder, d.tabs, sizeof tabOrder);
     hiddenTabs = d.hidden;
+    memcpy(customIds, d.custom, sizeof customIds);
     startTab = d.start;
     arrangeTabs();
     brightness = d.brightness;
@@ -2030,6 +2080,157 @@ void showNotification(const char* app, const char* summary, const char* body, bo
     wake();
     if (critical) showAlert(app, summary, body);
     else showCard(app, summary, body);
+}
+
+namespace {
+
+// The custom tab with this id, by its slot, or -1.
+int customSlot(const char* id) {
+    if (!id || !*id) return -1;
+    for (uint8_t s = 0; s < kCustomCount; s++)
+        if (strcmp(customIds[s], id) == 0) return s;
+    return -1;
+}
+
+void clearCustomTab(uint8_t slot) {
+    lv_obj_clean(tabPages[kBuiltinCount + slot]);
+    customTabs[slot].panelCount = 0;
+}
+
+// A panel's card in its grid cells: its title at the top, the dot of a status
+// panel beside it, its value in the middle and its note at the bottom; or for
+// text, the text under the title.
+void buildPanel(lv_obj_t* page, Panel& p, const PanelDef& def, uint8_t cols, uint8_t rows) {
+    // The card's size, worked out from the grid rather than waiting for a
+    // layout, which a hidden page doesn't get.
+    const lv_coord_t cellW = (kBodyW - (cols - 1) * kGap) / cols;
+    const lv_coord_t cellH = (kBodyH - (rows - 1) * kGap) / rows;
+    const lv_coord_t cardW = cellW * def.colSpan + kGap * (def.colSpan - 1);
+    const lv_coord_t cardH = cellH * def.rowSpan + kGap * (def.rowSpan - 1);
+    p.style = def.style;
+    p.w = cardW - 2 * 12 - 2;
+    p.h = cardH - 2 * 8 - 2;
+
+    p.card = makeCard(page, 0, 0, cardW, cardH);
+    lv_obj_set_grid_cell(p.card, LV_GRID_ALIGN_STRETCH, def.col, def.colSpan, LV_GRID_ALIGN_STRETCH, def.row,
+                         def.rowSpan);
+
+    p.title = makeCaption(p.card, def.title);
+    lv_label_set_long_mode(p.title, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(p.title, def.style == PanelStyle::Status ? p.w - 16 : p.w);
+    lv_obj_set_pos(p.title, 0, 0);
+
+    p.dot = nullptr;
+    if (def.style == PanelStyle::Status) {
+        p.dot = makeRect(p.card, 10, 10, kTextFaint, LV_RADIUS_CIRCLE);
+        lv_obj_align(p.dot, LV_ALIGN_TOP_RIGHT, 0, 2);
+    }
+
+    if (def.style == PanelStyle::Text) {
+        p.value = makeLabel(p.card, &lv_font_montserrat_14, kText, "");
+        lv_label_set_long_mode(p.value, LV_LABEL_LONG_DOT);
+        lv_obj_set_size(p.value, p.w, p.h - 20);
+        lv_obj_set_pos(p.value, 0, 20);
+        p.sub = nullptr;
+        return;
+    }
+    p.value = makeLabel(p.card, &lv_font_montserrat_28, kTextFaint, "--");
+    lv_label_set_long_mode(p.value, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(p.value, p.w);
+    lv_obj_align(p.value, LV_ALIGN_LEFT_MID, 0, 4);
+    p.sub = makeLabel(p.card, &lv_font_montserrat_12, kTextFaint, "");
+    lv_label_set_long_mode(p.sub, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(p.sub, p.w);
+    lv_obj_align(p.sub, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+}
+
+// The biggest font `text` fits in on one line, below the title and above the note.
+const lv_font_t* fitFont(const Panel& p, const char* text) {
+    static const lv_font_t* const kFonts[] = {&lv_font_montserrat_40, &lv_font_montserrat_28,
+                                              &lv_font_montserrat_20, &lv_font_montserrat_14};
+    const lv_coord_t room = p.h - 2 * 16;  // title and note
+    for (const lv_font_t* f : kFonts) {
+        lv_point_t size;
+        lv_txt_get_size(&size, text, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (size.x <= p.w && size.y <= room) return f;
+    }
+    return kFonts[3];
+}
+
+uint32_t stateColor(PanelState s, uint32_t otherwise) {
+    switch (s) {
+        case PanelState::Ok: return kGreen;
+        case PanelState::Warn: return kOrange;
+        case PanelState::Err: return kRed;
+        case PanelState::Stale: return kTextFaint;
+        default: return otherwise;
+    }
+}
+
+}  // namespace
+
+void setCustomTabs(const char* const* ids, size_t count) {
+    for (uint8_t s = 0; s < kCustomCount; s++) {
+        bool present = false;
+        for (size_t i = 0; i < count; i++) present |= customIds[s][0] && strcmp(customIds[s], ids[i]) == 0;
+        if (customPresent[s] && !present) clearCustomTab(s);
+        customPresent[s] = present;
+    }
+    arrangeTabs();
+}
+
+void setCustomTab(const char* id, const char* name, const char* icon, uint8_t cols, uint8_t rows,
+                  const PanelDef* panels, size_t count) {
+    const int slot = customSlot(id);
+    if (slot < 0) return;
+    const uint8_t t = kBuiltinCount + slot;
+    lv_label_set_text(tabPillIcons[t], *icon ? icon : LV_SYMBOL_LIST);
+    lv_label_set_text(tabPillNames[t], name);
+
+    cols = cols < 1 ? 1 : cols > kMaxPanelCols ? kMaxPanelCols : cols;
+    rows = rows < 1 ? 1 : rows > kMaxPanelRows ? kMaxPanelRows : rows;
+    CustomTab& tab = customTabs[slot];
+    clearCustomTab(slot);
+    for (uint8_t c = 0; c < cols; c++) tab.cols[c] = LV_GRID_FR(1);
+    tab.cols[cols] = LV_GRID_TEMPLATE_LAST;
+    for (uint8_t r = 0; r < rows; r++) tab.rows[r] = LV_GRID_FR(1);
+    tab.rows[rows] = LV_GRID_TEMPLATE_LAST;
+    lv_obj_t* page = tabPages[t];
+    lv_obj_set_grid_dsc_array(page, tab.cols, tab.rows);
+    lv_obj_set_style_pad_gap(page, kGap, 0);
+
+    for (size_t i = 0; i < count && i < kMaxPanels; i++) {
+        PanelDef def = panels[i];
+        // Kept inside the grid, whatever the host says.
+        if (def.col >= cols || def.row >= rows) continue;
+        if (def.colSpan < 1) def.colSpan = 1;
+        if (def.rowSpan < 1) def.rowSpan = 1;
+        if (def.col + def.colSpan > cols) def.colSpan = cols - def.col;
+        if (def.row + def.rowSpan > rows) def.rowSpan = rows - def.row;
+        buildPanel(page, tab.panels[tab.panelCount++], def, cols, rows);
+    }
+    styleTabPills();
+}
+
+void setPanel(const char* tab, size_t index, const char* text, const char* sub, PanelState state) {
+    const int slot = customSlot(tab);
+    if (slot < 0 || index >= customTabs[slot].panelCount) return;
+    const Panel& p = customTabs[slot].panels[index];
+    lv_label_set_text(p.value, text);
+    if (p.style == PanelStyle::Text) {
+        lv_obj_set_style_text_color(p.value, lv_color_hex(stateColor(state, kText)), 0);
+        return;
+    }
+    lv_obj_set_style_text_font(p.value, fitFont(p, text), 0);
+    lv_label_set_text(p.sub, sub);
+    if (p.style == PanelStyle::Status) {
+        lv_obj_set_style_bg_color(p.dot, lv_color_hex(stateColor(state, kTextFaint)), 0);
+        lv_obj_set_style_text_color(p.value, lv_color_hex(state == PanelState::Stale ? kTextFaint : kText), 0);
+    } else {
+        // Ok is the usual: it doesn't colour a value green.
+        const PanelState shown = state == PanelState::Ok ? PanelState::None : state;
+        lv_obj_set_style_text_color(p.value, lv_color_hex(stateColor(shown, kText)), 0);
+    }
 }
 
 }  // namespace ui

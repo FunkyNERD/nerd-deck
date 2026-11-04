@@ -1,4 +1,4 @@
-# nerd-deck wire protocol (v6)
+# nerd-deck wire protocol (v7)
 
 Transport: USB CDC serial (ESP32-S3 USB-Serial-JTAG, `303a:1001`). Baud is
 ignored on native USB.
@@ -15,7 +15,7 @@ Bump `PROTO_VERSION` / `kProtoVersion` together on breaking changes.
 ### `hello`
 Sent on connect. The device replies with its own `hello`.
 ```json
-{"type":"hello","proto":5,"host":"workstation"}
+{"type":"hello","proto":7,"host":"workstation"}
 ```
 
 ### `stats`
@@ -188,6 +188,54 @@ Fields left out keep the device's stored values.
 The host installs firmware around the image's NVS partition, where these are
 kept, so they survive an update.
 
+Custom tabs (v7) count as tabs here, by their ids: in `tabs`, `hidden` and
+`start`, and in the device's own `display`, which lists those it has a slot
+for.
+
+### `tabs`
+The host's custom tabs, by id: up to 3 (more are left out), each 1-15 bytes
+and not a built-in tab's name. Sent after the device's `hello`, and when the
+config is reloaded, to devices that say `proto` 7 or more. The device gives
+each a slot it keeps in flash with its place in the order and whether it's
+off, so a tab that comes back keeps them; a tab no longer listed loses its
+slot and its page. It answers with its `display`, where the tabs now are. A
+`tab` for each follows.
+```json
+{"type":"tabs","ids":["infra","markets"]}
+```
+
+### `tab`
+One custom tab: its header pill and its grid of panels. Replaces what the
+tab showed; its panels show `--` until a `panel` arrives.
+```json
+{"type":"tab","id":"infra","name":"Infra","icon":"\uF00B","grid":[2,2],
+ "panels":[{"style":"status","title":"Git","at":[0,0],"span":[1,1]},
+           {"style":"value","title":"Load","at":[1,0],"span":[1,1]},
+           {"style":"value","title":"Bitcoin","at":[0,1],"span":[2,1]}]}
+```
+- `name`: up to 15 bytes. `icon` (optional): a built-in LVGL symbol, as for
+  buttons; a list icon when left out.
+- `grid`: columns and rows, 1-4 by 1-3, sharing the tab's page evenly.
+- `panels`: up to 12. `at` is a panel's top-left cell (column, row), and
+  `span` the columns and rows it covers; the device keeps them inside the
+  grid. `title` is up to 23 bytes.
+- `style`: how the device draws it. `value` is a number or a short text, as
+  big as it fits, with a note under it; `status` is the same with a coloured
+  dot beside the title; `text` is wrapped text.
+
+### `panel`
+What one panel shows: `i` is its place in its tab's `panels`. The host sends
+it when that changes.
+```json
+{"type":"panel","tab":"infra","i":0,"text":"200","sub":"84 ms","state":"ok"}
+```
+- `text`: up to 63 bytes, ASCII. `sub` (optional): the note under it, up to
+  31 bytes; `text` panels have none.
+- `state` (optional): `ok`, `warn`, `err`, or `stale` (couldn't be refreshed:
+  the last text, greyed, with the reason in `sub`). A status panel's dot takes
+  its colour (green, orange, red, grey); a value is orange for `warn` and red
+  for `err`.
+
 ## Device → host
 
 ### `hello`
@@ -197,7 +245,7 @@ on a matching board. Firmware before v3 doesn't send it, and only ever ran on
 `wt32-sc01-plus`. `tile` (v5) is a Controls button's face in pixels, inside its
 border: the size button images are made to fill.
 ```json
-{"type":"hello","fw":"0.11.0","proto":6,"board":"wt32-sc01-plus","tile":[108,81],
+{"type":"hello","fw":"0.11.0","proto":7,"board":"wt32-sc01-plus","tile":[108,81],
  "display":{"tabs":["system","network","storage","battery","controls"],"hidden":[],"start":"first",
             "brightness":80,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}}
 ```
@@ -239,3 +287,5 @@ command for it. The device never sends a command string.
   adds battery power, time left, capacity and health for the battery screen.
 - **v6**: adds the `display` message: tab order, start tab, brightness and
   power saving.
+- **v7**: adds custom tabs: the `tabs`, `tab` and `panel` messages, and their
+  ids in `display`.

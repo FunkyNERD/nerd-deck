@@ -146,6 +146,21 @@ reads `/sys/class/power_supply`; what shows depends on what the battery
 reports. The header's battery reading on the right shows the charge from every
 tab.
 
+### Custom tabs
+
+Up to three tabs of your own, each a grid of panels (up to 4 x 3) that show
+what a web page, an API or a command says: a price, whether a server answers
+and how fast, a reading from a script, or a note. Add them to the config as
+`[[tab]]` entries with `[[tab.panel]]`s (`host/config.example.toml` has a
+commented example), or build them on the settings window's Custom tabs page. They join the deck's tabs, and the settings
+window orders them and turns them on and off like the others.
+
+Each panel is refreshed at its own interval (at least 5 seconds for web
+requests), whatever the stats interval, and only while its tab is on. Numbers
+can turn orange and red past limits you set. A panel that can't be refreshed
+keeps what it showed, greyed, with the reason under it. Needs firmware 0.11.0
+or later.
+
 ### Desktop notifications
 
 The device can show your desktop notifications too, such as new mail: it dims
@@ -190,6 +205,8 @@ icon) opens a window for everything in the config:
   Storage tab shows, in what order.
 - **Deck tabs:** the order of the deck's tabs and which are on, with a
   preview of its header.
+- **Custom tabs:** your own tabs: their name, icon, grid and refresh, and
+  their panels, on a preview of the deck. **Test** fetches a panel once.
 - **Notifications:** on or off, which apps (each app that has sent one is
   listed), message text, Do Not Disturb, low-urgency ones, and test
   notifications for the deck.

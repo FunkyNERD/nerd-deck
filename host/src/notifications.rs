@@ -318,7 +318,7 @@ fn prepare(cfg: &NotificationsConfig, n: Raw) -> Notification {
 /// freedesktop spec allows a little HTML in bodies), decode its entities, swap
 /// typographic punctuation for ASCII, drop anything else, fold whitespace and
 /// line breaks to single spaces, and cut to `max` bytes.
-fn clean(text: &str, max: usize) -> String {
+pub fn clean(text: &str, max: usize) -> String {
     let mut out = String::new();
     let mut rest = text;
     while let Some(c) = rest.chars().next() {

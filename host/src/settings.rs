@@ -9,6 +9,7 @@ slint::include_modules!();
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -22,11 +23,14 @@ use zbus::blocking::Connection;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
 use crate::api::{self, NerdDeckProxyBlocking, Status};
-use crate::config::{self, Config, MAX_BUTTONS, MAX_ID_LEN, MAX_LABEL_LEN};
+use crate::config::{
+    self, Config, PanelConfig, PanelKind, TabConfig, MAX_BUTTONS, MAX_GRID, MAX_ID_LEN, MAX_LABEL_LEN, MAX_PANELS,
+    MAX_PANEL_TITLE_LEN, MAX_TABS, MAX_TAB_ID_LEN, MAX_TAB_NAME_LEN,
+};
 use crate::firmware::KnownDevices;
 use crate::notifications::{SeenApp, SeenApps};
-use crate::protocol::{DisplayChange, DisplaySettings, TABS};
-use crate::{battery, collector, icons, images, unit, updates};
+use crate::protocol::{DisplayChange, DisplaySettings, PanelValue, TABS};
+use crate::{battery, collector, icons, images, panels, unit, updates};
 
 /// Held while the window is open. Opening it again asks the open one to come
 /// to the front instead (`Present`).
@@ -64,7 +68,7 @@ pub const INTERVALS: [(u64, &str); 6] = [
 const MAX_DISKS: usize = 4;
 
 /// Sections, in sidebar order, by the names `--page` takes.
-const PAGES: [&str; 7] = ["device", "buttons", "stats", "tabs", "notifications", "firmware", "about"];
+const PAGES: [&str; 8] = ["device", "buttons", "stats", "tabs", "custom", "notifications", "firmware", "about"];
 
 /// The choices offered for `display.dim_after`, in minutes.
 const DIM_AFTER: [(u32, &str); 5] =
@@ -94,6 +98,32 @@ fn minutes_choices(choices: &[(u32, &str)], value: u32) -> (Vec<SharedString>, i
         }
     };
     (labels, index as i32)
+}
+
+/// The tabs the deck can open on, after "First tab": the built-in ones, then
+/// its custom ones.
+fn start_tabs(d: &DisplaySettings) -> Vec<&str> {
+    TABS.iter().copied().chain(d.tab_order().into_iter().filter(|t| !TABS.contains(t))).collect()
+}
+
+/// A tab for the Deck tabs page: name, what's on it, Font Awesome glyph. A
+/// custom tab's come from the config.
+fn tab_label(cfg: &Config, id: &str) -> (String, String, String) {
+    if TABS.contains(&id) {
+        let (name, desc, glyph) = tab_info(id);
+        return (name.into(), desc.into(), glyph.into());
+    }
+    let glyph = |icon: Option<&str>| icons::lookup(icon.unwrap_or("list")).map(String::from).unwrap_or_default();
+    match cfg.tabs.iter().find(|t| t.id == id) {
+        Some(t) => {
+            let panels = match t.panels.len() {
+                1 => "1 panel".to_owned(),
+                n => format!("{n} panels"),
+            };
+            (t.name.clone(), format!("Custom: {panels} from the config"), glyph(t.icon.as_deref()))
+        }
+        None => (id.to_owned(), "Custom tab".into(), glyph(None)),
+    }
 }
 
 /// The deck's tabs for the Deck tabs page: name, what's on it, Font Awesome glyph.
@@ -291,6 +321,52 @@ fn action_of(command: &str) -> i32 {
     ACTION_PROGRAM
 }
 
+/// A custom tab being edited.
+#[derive(Debug, Clone)]
+struct EditTab {
+    cfg: TabConfig,
+    /// Added in this window; its ID follows its name until the window closes.
+    fresh: bool,
+}
+
+/// What Test fetched for a panel, by tab ID and place, for the preview.
+/// Shared with the threads that fetch.
+type PanelResults = Arc<Mutex<HashMap<(String, usize), Result<PanelValue, String>>>>;
+
+/// Refresh intervals to pick from, in seconds. A config's other value is
+/// offered too.
+const REFRESH: [u64; 11] = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+
+/// Panel kinds in the order the window lists them.
+const PANEL_KINDS: [PanelKind; 4] = [PanelKind::Url, PanelKind::Status, PanelKind::Command, PanelKind::Text];
+
+/// Digits a number can be shown with, after "as it comes".
+const MAX_DECIMALS: u8 = 3;
+
+fn refresh_label(secs: u64) -> String {
+    match secs {
+        s if s >= 3600 && s % 3600 == 0 => format!("{} h", s / 3600),
+        s if s >= 60 && s % 60 == 0 => format!("{} min", s / 60),
+        s => format!("{s} s"),
+    }
+}
+
+/// The intervals to offer, with `current` among them.
+fn refresh_choices(current: Option<u64>) -> Vec<u64> {
+    let mut choices = REFRESH.to_vec();
+    if let Some(c) = current.filter(|c| !choices.contains(c)) {
+        choices.push(c);
+        choices.sort_unstable();
+    }
+    choices
+}
+
+/// The host part of a URL, for a hint.
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
 /// The deck's label colour when a button doesn't set one.
 const DEFAULT_LABEL: u32 = 0xECEFF4;
 
@@ -310,6 +386,9 @@ struct State {
     cfg: Config,
     /// One per deck slot; buttons first, then empty slots.
     buttons: Vec<Option<Button>>,
+    /// The custom tabs, as edited.
+    tabs: Vec<EditTab>,
+    panel_results: PanelResults,
     icon_filter: String,
     /// Previews by resolved path.
     images: HashMap<PathBuf, Option<slint::Image>>,
@@ -362,11 +441,14 @@ impl State {
             })
             .collect();
         buttons.resize(MAX_BUTTONS, None);
+        let tabs = cfg.tabs.iter().map(|t| EditTab { cfg: t.clone(), fresh: false }).collect();
         Ok(Self {
             path,
             doc,
             cfg,
             buttons,
+            tabs,
+            panel_results: Arc::default(),
             icon_filter: String::new(),
             images: HashMap::new(),
             status: None,
@@ -391,6 +473,8 @@ impl State {
     fn save(&mut self, ui: &SettingsWindow) {
         self.dirty = false;
         self.write_buttons();
+        let tabs: Vec<TabConfig> = self.tabs.iter().map(|t| t.cfg.clone()).collect();
+        write_tabs(&mut self.doc, &tabs);
         let text = self.doc.to_string();
         let checked = toml::from_str::<Config>(&text)
             .map_err(anyhow::Error::from)
@@ -511,6 +595,141 @@ impl State {
         }
     }
 
+    // ---- Custom tabs ----
+
+    fn unique_tab_id(&self, name: &str, skip: usize) -> String {
+        let mut base: String = name
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        if base.is_empty() {
+            base = "tab".into();
+        }
+        base.truncate(MAX_TAB_ID_LEN - 3);
+        let taken = |id: &str| {
+            TABS.contains(&id) || self.tabs.iter().enumerate().any(|(i, t)| i != skip && t.cfg.id == id)
+        };
+        let mut id = base.clone();
+        let mut n = 2;
+        while taken(&id) {
+            id = format!("{base}-{n}");
+            n += 1;
+        }
+        id
+    }
+
+    fn custom_tab_row(&self, t: &TabConfig) -> CustomTab {
+        let choices = refresh_choices(Some(t.interval));
+        let icon = t.icon.clone().unwrap_or_else(|| "list".into());
+        CustomTab {
+            id: t.id.clone().into(),
+            name: t.name.clone().into(),
+            glyph: icons::lookup(&icon).map(String::from).unwrap_or_default().into(),
+            icon: icon.into(),
+            cols: t.grid[0].into(),
+            rows: t.grid[1].into(),
+            refresh: ModelRc::new(VecModel::from(
+                choices.iter().map(|&s| SharedString::from(refresh_label(s))).collect::<Vec<_>>(),
+            )),
+            interval: choices.iter().position(|&s| s == t.interval).unwrap_or(0) as i32,
+        }
+    }
+
+    fn panel_cell(&self, tab: &TabConfig, i: usize, at: [u8; 2]) -> PanelCell {
+        let p = &tab.panels[i];
+        let choices = refresh_choices(p.interval);
+        let refresh: Vec<SharedString> = std::iter::once(format!("The tab's ({})", refresh_label(tab.interval)))
+            .chain(choices.iter().map(|&s| refresh_label(s)))
+            .map(Into::into)
+            .collect();
+        let number = |n: Option<f64>| n.map(|n| n.to_string()).unwrap_or_default();
+        // A test's result, or a hint at where it comes from.
+        let result = self.panel_results.lock().unwrap().get(&(tab.id.clone(), i)).cloned();
+        let (shows, note, state) = match (result, p.kind) {
+            (Some(Ok(v)), _) => (v.text, v.sub, v.state.unwrap_or_default().to_owned()),
+            (Some(Err(e)), PanelKind::Status) => ("down".into(), e, "err".into()),
+            (Some(Err(e)), _) => ("--".into(), e, "stale".into()),
+            (None, PanelKind::Text) => (p.text.clone().unwrap_or_default(), String::new(), String::new()),
+            (None, PanelKind::Command) => {
+                let command = p.command.as_deref().unwrap_or("").lines().next().unwrap_or("");
+                ("--".into(), format!("$ {command}"), String::new())
+            }
+            (None, _) => ("--".into(), url_host(p.url.as_deref().unwrap_or("")).to_owned(), String::new()),
+        };
+        PanelCell {
+            kind: PANEL_KINDS.iter().position(|k| *k == p.kind).unwrap_or(0) as i32,
+            title: p.title.clone().into(),
+            url: p.url.clone().unwrap_or_default().into(),
+            json: p.json.clone().unwrap_or_default().into(),
+            sub_json: p.sub_json.clone().unwrap_or_default().into(),
+            command: p.command.clone().unwrap_or_default().into(),
+            text: p.text.clone().unwrap_or_default().into(),
+            unit: p.unit.clone().into(),
+            decimals: p.decimals.map_or(0, |d| i32::from(d) + 1),
+            warn: number(p.warn).into(),
+            crit: number(p.crit).into(),
+            refresh: ModelRc::new(VecModel::from(refresh)),
+            interval: p.interval.and_then(|s| choices.iter().position(|&c| c == s)).map_or(0, |i| i as i32 + 1),
+            col: at[0].into(),
+            row: at[1].into(),
+            w: p.span[0].into(),
+            h: p.span[1].into(),
+            shows: shows.into(),
+            note: note.into(),
+            state: state.into(),
+            has_headers: !p.headers.is_empty(),
+        }
+    }
+
+    fn refresh_custom(&self, ui: &SettingsWindow) {
+        let b = ui.global::<Backend>();
+        let rows: Vec<CustomTab> = self.tabs.iter().map(|t| self.custom_tab_row(&t.cfg)).collect();
+        let sel = (b.get_custom_tab().max(0) as usize).min(self.tabs.len().saturating_sub(1));
+        b.set_custom_tab(sel as i32);
+        let cells: Vec<PanelCell> = match self.tabs.get(sel) {
+            Some(t) => {
+                let at = t.cfg.layout().unwrap_or_default();
+                at.iter().enumerate().map(|(i, &at)| self.panel_cell(&t.cfg, i, at)).collect()
+            }
+            None => Vec::new(),
+        };
+        if b.get_panel() >= cells.len() as i32 {
+            b.set_panel(-1);
+        }
+        // In place, so the preview and fields don't rebuild under the pointer.
+        update_model(&b.get_custom_tabs(), rows, |m| b.set_custom_tabs(m));
+        update_model(&b.get_panels(), cells, |m| b.set_panels(m));
+    }
+
+    /// Changes custom tab `t` if what `edit` makes of it still fits its
+    /// grid; otherwise says why not and leaves it.
+    fn edit_tab(&mut self, ui: &SettingsWindow, t: usize, edit: impl FnOnce(&mut TabConfig)) -> bool {
+        let Some(tab) = self.tabs.get(t) else { return false };
+        let mut changed = tab.cfg.clone();
+        edit(&mut changed);
+        if changed.layout().is_none() {
+            let [c, r] = changed.grid;
+            problem(ui, format!("The panels wouldn't fit a {c} × {r} grid: make the grid bigger, or a panel smaller"));
+            self.refresh_custom(ui);
+            return false;
+        }
+        self.tabs[t].cfg = changed;
+        true
+    }
+
+    /// Changes panel `p` of custom tab `t`, as `edit_tab` does.
+    fn edit_panel(&mut self, ui: &SettingsWindow, t: usize, p: usize, edit: impl FnOnce(&mut PanelConfig)) -> bool {
+        if self.tabs.get(t).is_none_or(|tab| p >= tab.cfg.panels.len()) {
+            return false;
+        }
+        self.edit_tab(ui, t, |tab| edit(&mut tab.panels[p]))
+    }
+
     // ---- Stats ----
 
     fn disk_rows(&self) -> Vec<DiskRow> {
@@ -579,16 +798,16 @@ impl State {
 
         b.set_can_hide_tabs(d.hidden.is_some());
         let first_on = order.iter().copied().find(|t| d.shows(t)).unwrap_or(order[0]);
-        let first = tab_info(first_on).0;
+        let first = tab_label(&self.cfg, first_on).0;
         let starts: Vec<SharedString> = std::iter::once(format!("First tab ({first})"))
-            .chain(TABS.iter().map(|t| {
-                let name = tab_info(t).0;
-                if d.shows(t) { name.to_owned() } else { format!("{name} (off)") }
+            .chain(start_tabs(&d).into_iter().map(|t| {
+                let name = tab_label(&self.cfg, t).0;
+                if d.shows(t) { name } else { format!("{name} (off)") }
             }))
             .map(Into::into)
             .collect();
         b.set_start_options(ModelRc::new(VecModel::from(starts)));
-        let start = TABS.iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
+        let start = start_tabs(&d).iter().position(|t| *t == d.start).map_or(0, |i| i + 1);
         b.set_start_index(start as i32);
 
         let (dims, index) = minutes_choices(&DIM_AFTER, d.dim_after / 60);
@@ -607,7 +826,7 @@ impl State {
         let rows: Vec<TabRow> = order
             .iter()
             .map(|id| {
-                let (name, desc, glyph) = tab_info(id);
+                let (name, desc, glyph) = tab_label(&self.cfg, id);
                 TabRow {
                     name: name.into(),
                     desc: desc.into(),
@@ -617,7 +836,9 @@ impl State {
                         "network" => 0x26C6DA,
                         "storage" => 0xFFA726,
                         "battery" => 0x66BB6A,
-                        _ => 0x42A5F5,
+                        "controls" => 0x42A5F5,
+                        // A custom tab's, as on the deck.
+                        _ => 0x26C6DA,
                     }),
                     start: *id == opens,
                     laptop: *id == "battery",
@@ -875,6 +1096,148 @@ fn write_buttons(doc: &mut DocumentMut, buttons: &[Option<Button>]) {
     doc.remove("button");
     if !tables.is_empty() {
         doc.insert("button", Item::ArrayOfTables(tables));
+    }
+}
+
+/// Replace the [[tab]] tables. Each tab keeps the comments above it; the
+/// keys are written fresh, leaving out those at their defaults.
+fn write_tabs(doc: &mut DocumentMut, tabs: &[TabConfig]) {
+    let old: Vec<Table> = doc
+        .get("tab")
+        .and_then(Item::as_array_of_tables)
+        .map(|a| a.iter().cloned().collect())
+        .unwrap_or_default();
+    let ints = |v: [u8; 2]| Value::from(v.iter().map(|&n| i64::from(n)).collect::<Array>());
+    let mut tables = ArrayOfTables::new();
+    for (i, tab) in tabs.iter().enumerate() {
+        let mut t = Table::new();
+        let prev = old.iter().position(|o| o.get("id").and_then(Item::as_str) == Some(tab.id.as_str()));
+        match (i, prev) {
+            (0, _) => match old.first() {
+                Some(first) => *t.decor_mut() = first.decor().clone(),
+                // The first tab goes under the comments that end the file,
+                // which introduce custom tabs in the example config.
+                None => {
+                    let trailing = doc.trailing().as_str().unwrap_or("").to_owned();
+                    t.decor_mut().set_prefix(if trailing.trim().is_empty() { "\n".to_owned() } else { trailing });
+                    doc.set_trailing("");
+                }
+            },
+            (_, Some(j)) if j > 0 => *t.decor_mut() = old[j].decor().clone(),
+            _ => t.decor_mut().set_prefix("\n"),
+        }
+        t.insert("id", Item::Value(tab.id.as_str().into()));
+        t.insert("name", Item::Value(tab.name.as_str().into()));
+        if let Some(icon) = &tab.icon {
+            t.insert("icon", Item::Value(icon.as_str().into()));
+        }
+        t.insert("grid", Item::Value(ints(tab.grid)));
+        t.insert("interval", Item::Value((tab.interval as i64).into()));
+        let mut panels = ArrayOfTables::new();
+        for p in &tab.panels {
+            let mut pt = Table::new();
+            let mut put = |key: &str, value: Value| {
+                pt.insert(key, Item::Value(value));
+            };
+            put("kind", match p.kind {
+                PanelKind::Url => "url",
+                PanelKind::Status => "status",
+                PanelKind::Command => "command",
+                PanelKind::Text => "text",
+            }
+            .into());
+            if !p.title.is_empty() {
+                put("title", p.title.as_str().into());
+            }
+            let web = matches!(p.kind, PanelKind::Url | PanelKind::Status);
+            let fetched = p.kind != PanelKind::Text;
+            let number = matches!(p.kind, PanelKind::Url | PanelKind::Command);
+            let text = |v: &Option<String>| v.as_deref().filter(|v| !v.is_empty()).map(Value::from);
+            if web {
+                if let Some(v) = text(&p.url) {
+                    put("url", v);
+                }
+                if !p.headers.is_empty() {
+                    let headers: toml_edit::InlineTable =
+                        p.headers.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect();
+                    put("headers", Value::InlineTable(headers));
+                }
+            }
+            if p.kind == PanelKind::Url {
+                for (key, v) in [("json", &p.json), ("sub_json", &p.sub_json)] {
+                    if let Some(v) = text(v) {
+                        put(key, v);
+                    }
+                }
+            }
+            if p.kind == PanelKind::Command {
+                if let Some(v) = text(&p.command) {
+                    put("command", v);
+                }
+            }
+            if p.kind == PanelKind::Text {
+                if let Some(v) = text(&p.text) {
+                    put("text", v);
+                }
+            }
+            if number {
+                if !p.unit.is_empty() {
+                    put("unit", p.unit.as_str().into());
+                }
+                if let Some(d) = p.decimals {
+                    put("decimals", i64::from(d).into());
+                }
+                if let Some(w) = p.warn {
+                    put("warn", w.into());
+                }
+                if let Some(c) = p.crit {
+                    put("crit", c.into());
+                }
+            }
+            if p.kind == PanelKind::Status && p.slow_ms != 1000 {
+                put("slow_ms", (p.slow_ms as i64).into());
+            }
+            if fetched {
+                if let Some(s) = p.interval {
+                    put("interval", (s as i64).into());
+                }
+                if p.timeout != 10 {
+                    put("timeout", (p.timeout as i64).into());
+                }
+            }
+            if p.span != [1, 1] {
+                put("span", ints(p.span));
+            }
+            panels.push(pt);
+        }
+        if !panels.is_empty() {
+            t.insert("panel", Item::ArrayOfTables(panels));
+        }
+        tables.push(t);
+    }
+    doc.remove("tab");
+    if !tables.is_empty() {
+        doc.insert("tab", Item::ArrayOfTables(tables));
+    } else if let Some(prefix) = old.first().and_then(|t| t.decor().prefix()).and_then(|p| p.as_str()) {
+        // The last tab gone: the comments above it end the file again.
+        if !prefix.trim().is_empty() {
+            doc.set_trailing(prefix);
+        }
+    }
+}
+
+/// Updates `model`'s rows in place when it has as many, so what shows them
+/// isn't rebuilt; otherwise gives `set` a new model.
+fn update_model<T: Clone + PartialEq + 'static>(model: &ModelRc<T>, rows: Vec<T>, set: impl FnOnce(ModelRc<T>)) {
+    match model.as_any().downcast_ref::<VecModel<T>>() {
+        Some(m) if m.row_count() == rows.len() => {
+            for (i, row) in rows.into_iter().enumerate() {
+                if m.row_data(i).as_ref() != Some(&row) {
+                    m.set_row_data(i, row);
+                }
+            }
+        }
+        _ => set(ModelRc::new(VecModel::from(rows))),
     }
 }
 
@@ -1503,6 +1866,286 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         });
     });
 
+    // ---- Custom tabs ----
+    let opts: Vec<SharedString> = std::iter::once("As it comes".to_owned())
+        .chain((0..=MAX_DECIMALS).map(|d| d.to_string()))
+        .map(Into::into)
+        .collect();
+    b.set_decimal_options(ModelRc::new(VecModel::from(opts)));
+    state.borrow().refresh_custom(ui);
+
+    /// Chooses what the custom tabs page shows: tab `t`, and panel `p` of it
+    /// or -1 for the tab's own settings.
+    fn open_custom(ui: &SettingsWindow, t: usize, p: i32) {
+        let b = ui.global::<Backend>();
+        b.set_custom_tab(t as i32);
+        b.set_panel(p);
+        b.set_panel_test("".into());
+    }
+    on!(on_add_custom_tab, |ui, st| {
+        if st.tabs.len() >= MAX_TABS {
+            return problem(&ui, format!("The deck has room for {MAX_TABS} custom tabs"));
+        }
+        let id = st.unique_tab_id("New tab", usize::MAX);
+        st.tabs.push(EditTab {
+            cfg: TabConfig {
+                id,
+                name: "New tab".into(),
+                icon: None,
+                grid: [2, 2],
+                interval: 60,
+                panels: Vec::new(),
+            },
+            fresh: true,
+        });
+        open_custom(&ui, st.tabs.len() - 1, -1);
+        st.refresh_custom(&ui);
+        st.save(&ui);
+    });
+    on!(on_remove_custom_tab, |ui, st, t| {
+        let t = t as usize;
+        if t >= st.tabs.len() {
+            return;
+        }
+        st.tabs.remove(t);
+        open_custom(&ui, t.saturating_sub(1), -1);
+        st.refresh_custom(&ui);
+        st.save(&ui);
+    });
+    on!(on_move_custom_tab, |ui, st, t, delta| {
+        let (from, to) = (t as usize, (t + delta) as usize);
+        if from >= st.tabs.len() || to >= st.tabs.len() {
+            return;
+        }
+        st.tabs.swap(from, to);
+        open_custom(&ui, to, -1);
+        st.refresh_custom(&ui);
+        st.save(&ui);
+    });
+    on!(on_select_custom_tab, |ui, st, t| {
+        open_custom(&ui, t as usize, -1);
+        st.refresh_custom(&ui);
+    });
+    {
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        b.on_set_custom_tab_name(move |t, text| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let t = t as usize;
+            let mut name = text.trim().to_string();
+            while name.len() > MAX_TAB_NAME_LEN {
+                name.pop();
+            }
+            if name.is_empty() || t >= st.tabs.len() {
+                return;
+            }
+            let fresh_id = st.tabs[t].fresh.then(|| st.unique_tab_id(&name, t));
+            let tab = &mut st.tabs[t];
+            tab.cfg.name = name;
+            if let Some(id) = fresh_id {
+                tab.cfg.id = id;
+            }
+            st.refresh_custom(&ui);
+            st.save_later(&ui, &state);
+        });
+    }
+    on!(on_set_custom_tab_icon, |ui, st, t, icon| {
+        if st.edit_tab(&ui, t as usize, |tab| tab.icon = Some(icon.to_string())) {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_set_custom_tab_grid, |ui, st, t, cols, rows| {
+        let grid = [cols.clamp(1, i32::from(MAX_GRID[0])) as u8, rows.clamp(1, i32::from(MAX_GRID[1])) as u8];
+        let fits = st.edit_tab(&ui, t as usize, |tab| {
+            tab.grid = grid;
+            // Panels as wide or tall as the grid stay so.
+            for p in &mut tab.panels {
+                p.span = [p.span[0].min(grid[0]), p.span[1].min(grid[1])];
+            }
+        });
+        if fits {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_set_custom_tab_interval, |ui, st, t, index| {
+        let Some(tab) = st.tabs.get(t as usize) else { return };
+        let Some(&secs) = refresh_choices(Some(tab.cfg.interval)).get(index as usize) else { return };
+        if st.edit_tab(&ui, t as usize, |tab| tab.interval = secs) {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_add_panel, |ui, st, t| {
+        let t = t as usize;
+        let Some(tab) = st.tabs.get(t) else { return };
+        if tab.cfg.panels.len() >= MAX_PANELS {
+            return problem(&ui, format!("A tab has room for {MAX_PANELS} panels"));
+        }
+        let panel: PanelConfig = toml::from_str("kind = 'text'\ntitle = 'Note'\ntext = 'New panel'").expect("a text panel");
+        if st.edit_tab(&ui, t, |tab| tab.panels.push(panel)) {
+            st.panel_results.lock().unwrap().clear();
+            let last = st.tabs[t].cfg.panels.len() - 1;
+            open_custom(&ui, t, last as i32);
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_remove_panel, |ui, st, t, p| {
+        let (t, p) = (t as usize, p as usize);
+        if st.tabs.get(t).is_none_or(|tab| p >= tab.cfg.panels.len()) {
+            return;
+        }
+        st.tabs[t].cfg.panels.remove(p);
+        st.panel_results.lock().unwrap().clear();
+        open_custom(&ui, t, -1);
+        st.refresh_custom(&ui);
+        st.save(&ui);
+    });
+    on!(on_move_panel, |ui, st, t, p, delta| {
+        let (t, from, to) = (t as usize, p as usize, (p + delta) as usize);
+        let Some(tab) = st.tabs.get(t) else { return };
+        if from >= tab.cfg.panels.len() || to >= tab.cfg.panels.len() {
+            return;
+        }
+        if st.edit_tab(&ui, t, |tab| tab.panels.swap(from, to)) {
+            st.panel_results.lock().unwrap().clear();
+            open_custom(&ui, t, to as i32);
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_set_panel_kind, |ui, st, t, p, kind| {
+        let Some(&kind) = PANEL_KINDS.get(kind as usize) else { return };
+        let changed = st.edit_panel(&ui, t as usize, p as usize, |panel| {
+            panel.kind = kind;
+            // Enough to be a valid panel straight away.
+            let empty = |v: &Option<String>| v.as_deref().is_none_or(str::is_empty);
+            match kind {
+                PanelKind::Url | PanelKind::Status if empty(&panel.url) => panel.url = Some("https://".into()),
+                PanelKind::Command if empty(&panel.command) => panel.command = Some("date +%H:%M".into()),
+                PanelKind::Text if empty(&panel.text) => panel.text = Some("New panel".into()),
+                _ => {}
+            }
+            let floor = match kind {
+                PanelKind::Url | PanelKind::Status => config::MIN_URL_INTERVAL,
+                _ => config::MIN_COMMAND_INTERVAL,
+            };
+            if panel.interval.is_some_and(|s| s < floor) {
+                panel.interval = Some(floor);
+            }
+        });
+        if changed {
+            st.panel_results.lock().unwrap().remove(&(st.tabs[t as usize].cfg.id.clone(), p as usize));
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    {
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        b.on_set_panel_field(move |t, p, field, text| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let text = text.to_string();
+            let optional = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_owned());
+            // A number, or none; anything else isn't saved yet.
+            let number = |s: &str| -> Option<Option<f64>> {
+                match s.trim() {
+                    "" => Some(None),
+                    s => s.parse::<f64>().ok().filter(|n| n.is_finite()).map(Some),
+                }
+            };
+            let pointer = |s: &str| optional(s).map(|s| if s.starts_with('/') { s } else { format!("/{s}") });
+            let changed = match field.as_str() {
+                "warn" | "crit" => {
+                    let Some(n) = number(&text) else { return };
+                    st.edit_panel(&ui, t as usize, p as usize, |panel| {
+                        if field == "warn" {
+                            panel.warn = n;
+                        } else {
+                            panel.crit = n;
+                        }
+                    })
+                }
+                _ => st.edit_panel(&ui, t as usize, p as usize, |panel| match field.as_str() {
+                    "title" => {
+                        let mut title = text.clone();
+                        while title.len() > MAX_PANEL_TITLE_LEN {
+                            title.pop();
+                        }
+                        panel.title = title;
+                    }
+                    "url" => panel.url = optional(&text),
+                    "json" => panel.json = pointer(&text),
+                    "sub-json" => panel.sub_json = pointer(&text),
+                    "command" => panel.command = optional(&text),
+                    "text" => panel.text = optional(&text),
+                    "unit" => panel.unit = text.clone(),
+                    _ => {}
+                }),
+            };
+            if changed {
+                st.refresh_custom(&ui);
+                st.save_later(&ui, &state);
+            }
+        });
+    }
+    on!(on_set_panel_choice, |ui, st, t, p, field, index| {
+        let (t, p) = (t as usize, p as usize);
+        let Some(panel) = st.tabs.get(t).and_then(|tab| tab.cfg.panels.get(p)) else { return };
+        let choices = refresh_choices(panel.interval);
+        let changed = st.edit_panel(&ui, t, p, |panel| match field.as_str() {
+            "decimals" => panel.decimals = (index > 0).then(|| (index - 1).min(i32::from(MAX_DECIMALS)) as u8),
+            "interval" => panel.interval = if index <= 0 { None } else { choices.get(index as usize - 1).copied() },
+            "w" => panel.span[0] = index.max(1) as u8,
+            "h" => panel.span[1] = index.max(1) as u8,
+            _ => {}
+        });
+        if changed {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_test_panel, |ui, st, t, p| {
+        let (t, p) = (t as usize, p as usize);
+        let Some(tab) = st.tabs.get(t) else { return };
+        let Some(panel) = tab.cfg.panels.get(p).cloned() else { return };
+        let key = (tab.cfg.id.clone(), p);
+        let results = st.panel_results.clone();
+        let b = ui.global::<Backend>();
+        b.set_panel_testing(true);
+        b.set_panel_test("".into());
+        let ui_weak = ui.as_weak();
+        thread::spawn(move || {
+            let started = Instant::now();
+            let result = panels::fetch(&panel);
+            let ms = started.elapsed().as_millis();
+            let (ok, text) = match &result {
+                Ok(v) if v.state == Some("err") => (false, format!("Down: {} · {ms} ms", v.text)),
+                Ok(v) if v.sub.is_empty() => (true, format!("Shows {:?} · {ms} ms", v.text)),
+                Ok(v) => (true, format!("Shows {:?}, {:?} under it · {ms} ms", v.text, v.sub)),
+                Err(e) => (false, format!("Couldn't: {e}")),
+            };
+            results.lock().unwrap().insert(key, result);
+            let _ = ui_weak.upgrade_in_event_loop(move |ui| {
+                let b = ui.global::<Backend>();
+                b.set_panel_testing(false);
+                // The state isn't Send: the preview takes the result the way
+                // a click on the tab refreshes it, keeping the panel open.
+                if b.get_custom_tab() != t as i32 {
+                    return;
+                }
+                b.invoke_select_custom_tab(t as i32);
+                b.set_panel(p as i32);
+                b.set_panel_test_ok(ok);
+                b.set_panel_test(text.into());
+            });
+        });
+    });
+
     // ---- Stats ----
     on!(on_set_interval, |ui, st, index| {
         let Some((ms, _)) = INTERVALS.get(index as usize) else { return };
@@ -1577,7 +2220,8 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         Some(DisplayChange { brightness: Some(percent as u8), ..Default::default() })
     });
     deck!(on_set_start, false, |ui, d, index| {
-        let start = if index <= 0 { "first" } else { TABS.get(index as usize - 1).copied().unwrap_or("first") };
+        let tabs = start_tabs(d);
+        let start = if index <= 0 { "first" } else { tabs.get(index as usize - 1).copied().unwrap_or("first") };
         Some(DisplayChange { start: Some(start.into()), ..Default::default() })
     });
     deck!(on_set_dim, false, |ui, d, index| {
@@ -1618,13 +2262,15 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             hidden.push((*tab).to_owned());
         }
         // One stays on.
-        if !TABS.iter().any(|t| !hidden.iter().any(|h| h == t)) {
+        if !order.iter().any(|t| !hidden.iter().any(|h| h == t)) {
             return;
         }
         Some(DisplayChange { hidden: Some(hidden), ..Default::default() })
     });
     deck!(on_reset_tabs, false, |ui, d| {
-        Some(DisplayChange { tabs: Some(TABS.iter().map(|t| (*t).to_owned()).collect()), ..Default::default() })
+        // The built-in tabs in their first order, the custom ones after them.
+        let tabs = start_tabs(d).into_iter().map(str::to_owned).collect();
+        Some(DisplayChange { tabs: Some(tabs), ..Default::default() })
     });
 
     // ---- Switches ----
@@ -1887,6 +2533,33 @@ mod tests {
         // Everything outside the buttons is untouched, comments included.
         let head = |t: &str| t[..t.find("[[button]]").unwrap()].to_owned();
         assert_eq!(head(&text), head(config::EXAMPLE));
+    }
+
+    #[test]
+    fn writes_custom_tabs() {
+        let tabs_toml = "[[tab]]\nid='infra'\nname='Infra'\ngrid=[2,1]\n\
+            [[tab.panel]]\nkind='status'\ntitle='Git'\nurl='https://git.example.com'\nheaders={Authorization='x'}\n\
+            [[tab.panel]]\nkind='url'\nurl='https://x/y'\njson='/a/b'\nunit='%'\ndecimals=1\nwarn=80.0\ncrit=95.0\ninterval=30\n\
+            [[tab]]\nid='notes'\nname='Notes'\nicon='bell'\ngrid=[1,1]\ninterval=60\n\
+            [[tab.panel]]\nkind='text'\ntext='Hi'\n";
+        let tabs: Config = toml::from_str(tabs_toml).unwrap();
+        let mut doc: DocumentMut = config::EXAMPLE.parse().unwrap();
+        write_tabs(&mut doc, &tabs.tabs);
+        let text = doc.to_string();
+        let cfg: Config = toml::from_str(&text).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.tabs, tabs.tabs);
+        // The buttons and the rest, comments included, are as they were.
+        assert!(text.starts_with(config::EXAMPLE.trim_end()));
+
+        // And again, with the second gone: the first keeps its place.
+        let mut doc: DocumentMut = text.parse().unwrap();
+        write_tabs(&mut doc, &tabs.tabs[..1]);
+        let cfg: Config = toml::from_str(&doc.to_string()).unwrap();
+        assert_eq!(cfg.tabs, tabs.tabs[..1]);
+        // With none left, the file is as it was, its comments at the end.
+        write_tabs(&mut doc, &[]);
+        assert_eq!(doc.to_string().trim_end(), config::EXAMPLE.trim_end());
     }
 
     #[test]

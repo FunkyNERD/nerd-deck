@@ -66,6 +66,51 @@ export struct AppRow {
     shown: bool,
 }
 
+// A custom tab, being edited.
+export struct CustomTab {
+    id: string,
+    name: string,
+    icon: string,
+    glyph: string,
+    cols: int,
+    rows: int,
+    // Refresh choices, and the one it has.
+    refresh: [string],
+    interval: int,
+}
+
+// One of the open custom tab's panels, being edited.
+export struct PanelCell {
+    // 0 a value from the web, 1 a URL's status, 2 a command, 3 text.
+    kind: int,
+    title: string,
+    url: string,
+    json: string,
+    sub-json: string,
+    command: string,
+    text: string,
+    unit: string,
+    // 0 as it comes, else digits + 1.
+    decimals: int,
+    warn: string,
+    crit: string,
+    // Refresh choices, the tab's first, and the one it has.
+    refresh: [string],
+    interval: int,
+    // Its cells: top-left, and how many across and down.
+    col: int,
+    row: int,
+    w: int,
+    h: int,
+    // What the preview shows: the last test's result, or a hint.
+    shows: string,
+    note: string,
+    // "ok", "warn", "err", "stale" or "".
+    state: string,
+    // Request headers are in the config; they're kept as they are.
+    has-headers: bool,
+}
+
 export struct KnownDeck {
     serial: string,
     note: string,
@@ -132,6 +177,36 @@ export global Backend {
     callback filter-icons(string);
     callback choose-image(int);
     callback run-command(int);
+
+    // Custom tabs
+    in property <[CustomTab]> custom-tabs;
+    in-out property <int> custom-tab;
+    // The open tab's panels; `panel` is the one being edited, or -1 for the tab.
+    in property <[PanelCell]> panels;
+    in-out property <int> panel: -1;
+    in property <[string]> decimal-options;
+    in-out property <string> panel-test;
+    in property <bool> panel-test-ok;
+    in property <bool> panel-testing;
+    callback add-custom-tab();
+    callback remove-custom-tab(int);
+    callback move-custom-tab(int, int);
+    callback select-custom-tab(int);
+    callback set-custom-tab-name(int, string);
+    callback set-custom-tab-icon(int, string);
+    // Columns, rows.
+    callback set-custom-tab-grid(int, int, int);
+    callback set-custom-tab-interval(int, int);
+    callback add-panel(int);
+    callback remove-panel(int, int);
+    callback move-panel(int, int, int);
+    callback set-panel-kind(int, int, int);
+    // Text fields, by name: title, url, json, sub-json, command, text, unit,
+    // warn, crit.
+    callback set-panel-field(int, int, string, string);
+    // Choices, by name: decimals, interval, w, h.
+    callback set-panel-choice(int, int, string, int);
+    callback test-panel(int, int);
 
     // Stats
     in property <[string]> intervals;

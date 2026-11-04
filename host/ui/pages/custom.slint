@@ -1,0 +1,700 @@
+import { LineEdit, TextEdit, ScrollView, ComboBox } from "std-widgets.slint";
+import { Theme, Glyphs } from "../theme.slint";
+import { Backend, CustomTab, PanelCell } from "../backend.slint";
+import { Card, Glyph, Segmented, PushButton } from "../widgets.slint";
+
+// What a panel's state looks like on the deck.
+global PanelLook {
+    pure public function value-color(cell: PanelCell) -> color {
+        if cell.state == "stale" { return Theme.text-faint; }
+        if cell.kind == 1 { return Theme.text; }
+        if cell.state == "warn" { return Theme.orange; }
+        if cell.state == "err" { return Theme.red; }
+        return Theme.text;
+    }
+    pure public function dot-color(state: string) -> color {
+        if state == "ok" { return Theme.green; }
+        if state == "warn" { return Theme.orange; }
+        if state == "err" { return Theme.red; }
+        return Theme.muted;
+    }
+}
+
+// A panel's card, drawn the way the deck draws it, at `scale`.
+component PanelCard inherits Rectangle {
+    in property <PanelCell> cell;
+    in property <bool> selected;
+    in property <float> scale;
+    callback clicked;
+    border-radius: 10px * root.scale;
+    background: Theme.card;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.cyan : Theme.border;
+    clip: true;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.cell.title == "" ? "Panel" : root.cell.title;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+    property <length> pad-x: 12px * root.scale;
+    property <length> pad-y: 8px * root.scale;
+
+    Text {
+        x: root.pad-x;
+        y: root.pad-y;
+        width: root.width - 2 * root.pad-x - (root.cell.kind == 1 ? 14px * root.scale : 0);
+        text: root.cell.title;
+        font-size: 12px * root.scale;
+        letter-spacing: 2px * root.scale;
+        color: Theme.text-dim;
+        overflow: elide;
+    }
+    if root.cell.kind == 1: Rectangle {
+        x: root.width - root.pad-x - self.width;
+        y: root.pad-y + 2px * root.scale;
+        width: 10px * root.scale;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: PanelLook.dot-color(root.cell.state);
+    }
+    if root.cell.kind == 3: Text {
+        x: root.pad-x;
+        y: root.pad-y + 20px * root.scale;
+        width: root.width - 2 * root.pad-x;
+        height: root.height - 2 * root.pad-y - 20px * root.scale;
+        text: root.cell.shows;
+        font-size: 14px * root.scale;
+        color: PanelLook.value-color(root.cell);
+        wrap: word-wrap;
+        overflow: elide;
+    }
+    if root.cell.kind != 3: Text {
+        x: root.pad-x;
+        y: (root.height - self.height) / 2 + 4px * root.scale;
+        width: root.width - 2 * root.pad-x;
+        text: root.cell.shows;
+        font-size: min(28px * root.scale, root.height * 0.3);
+        font-weight: 500;
+        color: PanelLook.value-color(root.cell);
+        overflow: elide;
+    }
+    if root.cell.kind != 3: Text {
+        x: root.pad-x;
+        y: root.height - root.pad-y - self.height;
+        width: root.width - 2 * root.pad-x;
+        text: root.cell.note;
+        font-size: 12px * root.scale;
+        color: Theme.text-faint;
+        overflow: elide;
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// A custom tab's chip above the preview.
+component TabChip inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+    height: 34px;
+    border-radius: 17px;
+    background: root.selected ? Theme.selected : touch.has-hover ? Theme.control : transparent;
+    border-width: 1px;
+    border-color: root.selected ? Theme.cyan : Theme.control-border;
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.label;
+    accessible-checked: root.selected;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+        Glyph { text: root.glyph; font-size: 13px; color: root.selected ? Theme.cyan : Theme.text-dim; }
+        Text {
+            text: root.label;
+            font-size: 13px;
+            font-weight: 500;
+            color: root.selected ? Theme.text : Theme.text-dim;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component FieldLabel inherits Text {
+    font-size: 12px;
+    font-weight: 600;
+    color: Theme.text-dim;
+}
+
+component Hint inherits Text {
+    font-size: 12px;
+    color: Theme.text-faint;
+    wrap: word-wrap;
+}
+
+// The open tab's settings.
+component TabInspector inherits VerticalLayout {
+    property <int> sel: Backend.custom-tab;
+    property <CustomTab> tab: Backend.custom-tabs[self.sel];
+
+    fields := ScrollView {
+        vertical-stretch: 1;
+        content-width: self.visible-width;
+        content-height: field-list.preferred-height;
+        field-list := VerticalLayout {
+            width: fields.visible-width;
+            padding: 16px;
+            spacing: 16px;
+            alignment: start;
+
+            VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Name"; }
+                LineEdit {
+                    // Keeps what's typed; another tab fills it in.
+                    property <int> source: root.sel;
+                    changed source => { self.text = root.tab.name; }
+                    text: root.tab.name;
+                    accessible-label: "Name";
+                    edited(text) => { Backend.set-custom-tab-name(root.sel, text); }
+                }
+                Text {
+                    text: "ID  " + root.tab.id;
+                    font-size: 12px;
+                    font-family: Theme.mono;
+                    color: Theme.text-faint;
+                }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                FieldLabel { text: "Grid"; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Across"; font-size: 13px; color: Theme.text-soft; vertical-alignment: center; width: 52px; }
+                    Segmented {
+                        options: ["1", "2", "3", "4"];
+                        current: root.tab.cols - 1;
+                        selected(i) => { Backend.set-custom-tab-grid(root.sel, i + 1, root.tab.rows); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Down"; font-size: 13px; color: Theme.text-soft; vertical-alignment: center; width: 52px; }
+                    Segmented {
+                        options: ["1", "2", "3"];
+                        current: root.tab.rows - 1;
+                        selected(i) => { Backend.set-custom-tab-grid(root.sel, root.tab.cols, i + 1); }
+                    }
+                }
+                Hint { text: "Panels fill the grid in order, row by row."; }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Refresh panels every"; }
+                ComboBox {
+                    model: root.tab.refresh;
+                    current-index: root.tab.interval;
+                    accessible-label: "Refresh panels every";
+                    selected => { Backend.set-custom-tab-interval(root.sel, self.current-index); }
+                }
+                Hint { text: "A panel can set its own. Only while the tab is on."; }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                FieldLabel { text: "Icon"; }
+                LineEdit {
+                    placeholder-text: "Search icons";
+                    accessible-label: "Search icons";
+                    edited(text) => { Backend.filter-icons(text); }
+                }
+                icon-scroll := ScrollView {
+                    height: 196px;
+                    property <length> tile: (self.visible-width - 5 * 6px) / 6;
+                    content-height: ceil(Backend.icons.length / 6) * (44px + 6px);
+                    for icon[i] in Backend.icons: Rectangle {
+                        x: mod(i, 6) * (icon-scroll.tile + 6px);
+                        y: floor(i / 6) * 50px;
+                        width: icon-scroll.tile;
+                        height: 44px;
+                        border-radius: 8px;
+                        background: icon.name == root.tab.icon ? Theme.selected : (icon-touch.has-hover ? Theme.control : Theme.field);
+                        border-width: 1px;
+                        border-color: icon.name == root.tab.icon ? Theme.cyan : Theme.border;
+                        accessible-role: AccessibleRole.button;
+                        accessible-label: icon.name;
+                        accessible-checked: icon.name == root.tab.icon;
+                        accessible-action-default => { Backend.set-custom-tab-icon(root.sel, icon.name); }
+                        Glyph {
+                            text: icon.glyph;
+                            font-size: 17px;
+                            color: icon.name == root.tab.icon ? Theme.text : Theme.text-dim;
+                        }
+                        icon-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { Backend.set-custom-tab-icon(root.sel, icon.name); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Rectangle { height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        padding: 10px;
+        padding-left: 8px;
+        spacing: 4px;
+        PushButton {
+            icon: Glyphs.left;
+            flat: true;
+            enabled: root.sel > 0;
+            accessible-label: "Move tab left";
+            clicked => { Backend.move-custom-tab(root.sel, -1); }
+        }
+        PushButton {
+            icon: Glyphs.right;
+            flat: true;
+            enabled: root.sel < Backend.custom-tabs.length - 1;
+            accessible-label: "Move tab right";
+            clicked => { Backend.move-custom-tab(root.sel, 1); }
+        }
+        PushButton {
+            text: "Add panel";
+            icon: Glyphs.plus;
+            clicked => { Backend.add-panel(root.sel); }
+        }
+        Rectangle { }
+        PushButton {
+            icon: Glyphs.trash;
+            danger: true;
+            accessible-label: "Remove tab";
+            clicked => { Backend.remove-custom-tab(root.sel); }
+        }
+    }
+}
+
+// The open panel's settings.
+component PanelInspector inherits VerticalLayout {
+    property <int> tab: Backend.custom-tab;
+    property <int> sel: Backend.panel;
+    property <PanelCell> cell: Backend.panels[self.sel];
+    property <int> cols: Backend.custom-tabs[self.tab].cols;
+    property <int> rows: Backend.custom-tabs[self.tab].rows;
+    // Text fields keep what's typed; another panel fills them in.
+    property <int> source: self.tab * 100 + self.sel;
+
+    HorizontalLayout {
+        padding: 8px;
+        padding-bottom: 0;
+        alignment: start;
+        PushButton {
+            text: "Tab settings";
+            icon: Glyphs.left;
+            flat: true;
+            clicked => { Backend.panel = -1; Backend.panel-test = ""; }
+        }
+    }
+    fields := ScrollView {
+        vertical-stretch: 1;
+        content-width: self.visible-width;
+        content-height: field-list.preferred-height;
+        field-list := VerticalLayout {
+            width: fields.visible-width;
+            padding: 16px;
+            padding-top: 8px;
+            spacing: 16px;
+            alignment: start;
+
+            VerticalLayout {
+                spacing: 8px;
+                FieldLabel { text: "Shows"; }
+                Segmented {
+                    options: ["Web value", "Status", "Command", "Text"];
+                    current: root.cell.kind;
+                    selected(i) => { Backend.set-panel-kind(root.tab, root.sel, i); }
+                }
+                Hint {
+                    text: root.cell.kind == 0 ? "A value from a web page or API: its first line, or a field of its JSON."
+                        : root.cell.kind == 1 ? "Whether a web address answers: its status, green, orange when slow, red when down."
+                        : root.cell.kind == 2 ? "The first line a command prints. It runs on this PC with sh -c, as you."
+                        : "Text of your own.";
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Title"; }
+                LineEdit {
+                    changed source => { self.text = root.cell.title; }
+                    property <int> source: root.source;
+                    text: root.cell.title;
+                    accessible-label: "Title";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "title", text); }
+                }
+            }
+
+            if root.cell.kind <= 1: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Web address"; }
+                LineEdit {
+                    property <int> source: root.source;
+                    changed source => { self.text = root.cell.url; }
+                    text: root.cell.url;
+                    placeholder-text: "https://";
+                    accessible-label: "Web address";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "url", text); }
+                }
+                if root.cell.has-headers: Hint { text: "Sent with request headers from the config file."; }
+            }
+
+            if root.cell.kind == 0: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "JSON field (optional)"; }
+                LineEdit {
+                    property <int> source: root.source;
+                    changed source => { self.text = root.cell.json; }
+                    text: root.cell.json;
+                    placeholder-text: "e.g. /data/amount";
+                    accessible-label: "JSON field";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "json", text); }
+                }
+                FieldLabel { text: "Note from JSON (optional)"; }
+                LineEdit {
+                    property <int> source: root.source;
+                    changed source => { self.text = root.cell.sub-json; }
+                    text: root.cell.sub-json;
+                    placeholder-text: "e.g. /data/change";
+                    accessible-label: "Note from JSON";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "sub-json", text); }
+                }
+                Hint { text: "A path into the response, like /data/0/price. Leave it empty to show the first line."; }
+            }
+
+            if root.cell.kind == 2: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Command"; }
+                TextEdit {
+                    property <int> source: root.source;
+                    changed source => { self.text = root.cell.command; }
+                    height: 72px;
+                    text: root.cell.command;
+                    font-size: 13px;
+                    accessible-label: "Command";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "command", text); }
+                }
+            }
+
+            if root.cell.kind == 3: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Text"; }
+                TextEdit {
+                    property <int> source: root.source;
+                    changed source => { self.text = root.cell.text; }
+                    height: 72px;
+                    text: root.cell.text;
+                    font-size: 13px;
+                    accessible-label: "Text";
+                    edited(text) => { Backend.set-panel-field(root.tab, root.sel, "text", text); }
+                }
+            }
+
+            if root.cell.kind == 0 || root.cell.kind == 2: VerticalLayout {
+                spacing: 8px;
+                FieldLabel { text: "Numbers"; }
+                // Two even columns: the fields' own minimum widths would
+                // push the second past the card.
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Hint { text: "Unit"; }
+                        LineEdit {
+                            property <int> source: root.source;
+                            changed source => { self.text = root.cell.unit; }
+                            min-width: 0;
+                            text: root.cell.unit;
+                            placeholder-text: "e.g. %";
+                            accessible-label: "Unit";
+                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "unit", text); }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Hint { text: "Decimals"; }
+                        ComboBox {
+                            min-width: 0;
+                            model: Backend.decimal-options;
+                            current-index: root.cell.decimals;
+                            accessible-label: "Decimals";
+                            selected => { Backend.set-panel-choice(root.tab, root.sel, "decimals", self.current-index); }
+                        }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Hint { text: "Orange from"; }
+                        LineEdit {
+                            property <int> source: root.source;
+                            changed source => { self.text = root.cell.warn; }
+                            min-width: 0;
+                            text: root.cell.warn;
+                            accessible-label: "Orange from";
+                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "warn", text); }
+                        }
+                    }
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+                        Hint { text: "Red from"; }
+                        LineEdit {
+                            property <int> source: root.source;
+                            changed source => { self.text = root.cell.crit; }
+                            min-width: 0;
+                            text: root.cell.crit;
+                            accessible-label: "Red from";
+                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "crit", text); }
+                        }
+                    }
+                }
+                Hint { text: "Set red below orange when lower is worse."; }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                FieldLabel { text: "Size"; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Across"; font-size: 13px; color: Theme.text-soft; vertical-alignment: center; width: 52px; }
+                    Segmented {
+                        options: root.cols == 1 ? ["1"] : root.cols == 2 ? ["1", "2"] : root.cols == 3 ? ["1", "2", "3"] : ["1", "2", "3", "4"];
+                        current: root.cell.w - 1;
+                        selected(i) => { Backend.set-panel-choice(root.tab, root.sel, "w", i + 1); }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Down"; font-size: 13px; color: Theme.text-soft; vertical-alignment: center; width: 52px; }
+                    Segmented {
+                        options: root.rows == 1 ? ["1"] : root.rows == 2 ? ["1", "2"] : ["1", "2", "3"];
+                        current: root.cell.h - 1;
+                        selected(i) => { Backend.set-panel-choice(root.tab, root.sel, "h", i + 1); }
+                    }
+                }
+            }
+
+            if root.cell.kind != 3: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Refresh every"; }
+                ComboBox {
+                    model: root.cell.refresh;
+                    current-index: root.cell.interval;
+                    accessible-label: "Refresh every";
+                    selected => { Backend.set-panel-choice(root.tab, root.sel, "interval", self.current-index); }
+                }
+            }
+
+            if Backend.panel-test != "": Text {
+                text: Backend.panel-test;
+                font-size: 12px;
+                color: Backend.panel-test-ok ? Theme.green-text : Theme.red-text;
+                wrap: word-wrap;
+            }
+        }
+    }
+    Rectangle { height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        padding: 10px;
+        padding-left: 8px;
+        spacing: 4px;
+        PushButton {
+            icon: Glyphs.left;
+            flat: true;
+            enabled: root.sel > 0;
+            accessible-label: "Move panel earlier";
+            clicked => { Backend.move-panel(root.tab, root.sel, -1); }
+        }
+        PushButton {
+            icon: Glyphs.right;
+            flat: true;
+            enabled: root.sel < Backend.panels.length - 1;
+            accessible-label: "Move panel later";
+            clicked => { Backend.move-panel(root.tab, root.sel, 1); }
+        }
+        PushButton {
+            text: Backend.panel-testing ? "Testing…" : "Test";
+            icon: Glyphs.play;
+            enabled: !Backend.panel-testing;
+            clicked => { Backend.test-panel(root.tab, root.sel); }
+        }
+        Rectangle { }
+        PushButton {
+            icon: Glyphs.trash;
+            danger: true;
+            accessible-label: "Remove panel";
+            clicked => { Backend.remove-panel(root.tab, root.sel); }
+        }
+    }
+}
+
+export component CustomTabsPage inherits HorizontalLayout {
+    padding: 24px;
+    spacing: 24px;
+    property <bool> has-tabs: Backend.custom-tabs.length > 0;
+    property <CustomTab> tab: Backend.custom-tabs[Backend.custom-tab];
+
+    VerticalLayout {
+        spacing: 12px;
+        horizontal-stretch: 1;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            for t[i] in Backend.custom-tabs: TabChip {
+                glyph: t.glyph;
+                label: t.name;
+                selected: i == Backend.custom-tab;
+                clicked => { Backend.select-custom-tab(i); }
+            }
+            if Backend.custom-tabs.length < 3: TabChip {
+                glyph: Glyphs.plus;
+                label: "Add tab";
+                clicked => { Backend.add-custom-tab(); }
+            }
+        }
+
+        if !root.has-tabs: Card {
+            VerticalLayout {
+                padding: 24px;
+                spacing: 10px;
+                Text {
+                    text: "No custom tabs yet";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: Theme.text;
+                }
+                Text {
+                    text: "A custom tab is a grid of panels on the deck, each showing what a web page, an API or a command says: a price, whether a server answers, a reading from a script, or a note. Add up to three.";
+                    font-size: 13px;
+                    color: Theme.text-dim;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        // The deck: a bezel round its 480 × 320 screen.
+        if root.has-tabs: Rectangle {
+            height: 292px;
+            border-radius: 16px;
+            background: #05070A;
+            border-width: 1px;
+            border-color: Theme.border;
+            screen := Rectangle {
+                height: parent.height - 20px;
+                width: self.height * 1.5;
+                x: (parent.width - self.width) / 2;
+                y: 10px;
+                border-radius: 6px;
+                background: Theme.sidebar;
+                clip: true;
+                property <float> scale: self.height / 320px;
+                property <length> gap: 8px * self.scale;
+                property <length> body-x: 8px * self.scale;
+                property <length> body-y: 47px * self.scale;
+                property <length> cell-w: (464px * self.scale - (root.tab.cols - 1) * self.gap) / root.tab.cols;
+                property <length> cell-h: (265px * self.scale - (root.tab.rows - 1) * self.gap) / root.tab.rows;
+
+                // The header: the stripe, and this tab's pill, open.
+                HorizontalLayout {
+                    y: 0;
+                    height: 3px * screen.scale;
+                    Rectangle { background: Theme.cyan; }
+                    Rectangle { background: Theme.green; }
+                    Rectangle { background: Theme.orange; }
+                }
+                Rectangle {
+                    x: screen.body-x;
+                    y: 7px * screen.scale;
+                    height: 34px * screen.scale;
+                    width: pill.preferred-width;
+                    border-radius: self.height / 2;
+                    background: Theme.card;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    pill := HorizontalLayout {
+                        padding-left: 14px * screen.scale;
+                        padding-right: 14px * screen.scale;
+                        spacing: 8px * screen.scale;
+                        Glyph { text: root.tab.glyph; font-size: 14px * screen.scale; color: Theme.cyan; }
+                        Text {
+                            text: root.tab.name;
+                            font-size: 14px * screen.scale;
+                            font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Every cell, faint, under the panels: an empty one adds a panel.
+                for i in root.tab.cols * root.tab.rows: Rectangle {
+                    x: screen.body-x + mod(i, root.tab.cols) * (screen.cell-w + screen.gap);
+                    y: screen.body-y + floor(i / root.tab.cols) * (screen.cell-h + screen.gap);
+                    width: screen.cell-w;
+                    height: screen.cell-h;
+                    border-radius: 10px * screen.scale;
+                    background: cell-touch.has-hover ? #121821 : transparent;
+                    border-width: 1px;
+                    border-color: #171D26;
+                    accessible-role: AccessibleRole.button;
+                    accessible-label: "Add a panel";
+                    accessible-action-default => { Backend.add-panel(Backend.custom-tab); }
+                    Glyph { text: Glyphs.plus; font-size: 12px; color: Theme.muted; }
+                    cell-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { Backend.add-panel(Backend.custom-tab); }
+                    }
+                }
+
+                for cell[i] in Backend.panels: PanelCard {
+                    x: screen.body-x + cell.col * (screen.cell-w + screen.gap);
+                    y: screen.body-y + cell.row * (screen.cell-h + screen.gap);
+                    width: cell.w * screen.cell-w + (cell.w - 1) * screen.gap;
+                    height: cell.h * screen.cell-h + (cell.h - 1) * screen.gap;
+                    cell: cell;
+                    scale: screen.scale;
+                    selected: i == Backend.panel;
+                    clicked => {
+                        Backend.panel = i;
+                        Backend.panel-test = "";
+                    }
+                }
+            }
+        }
+        if root.has-tabs: Text {
+            text: "Click a panel to change it, or an empty space to add one. Test fetches a panel once to show what it would say; on the deck, each refreshes on its own while its tab is on. Turn tabs on and off and order them on Deck tabs.";
+            font-size: 12px;
+            color: Theme.text-dim;
+            wrap: word-wrap;
+        }
+    }
+
+    if root.has-tabs: Card {
+        width: 340px;
+        if Backend.panel < 0: TabInspector { }
+        if Backend.panel >= 0: PanelInspector { }
+    }
+}

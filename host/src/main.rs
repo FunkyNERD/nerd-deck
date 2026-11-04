@@ -9,6 +9,7 @@ mod gpu;
 mod icons;
 mod images;
 mod mounts;
+mod panels;
 mod notifications;
 mod power_profile;
 mod protocol;
@@ -17,7 +18,7 @@ mod tray;
 mod unit;
 mod updates;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
@@ -31,7 +32,11 @@ use api::Command;
 use collector::{Collector, Shown};
 use config::Config;
 use device::Connection;
-use protocol::{ButtonDef, DeviceMsg, DisplayChange, DisplaySettings, HostMsg, PROTO_VERSION};
+use panels::Panels;
+use protocol::{
+    ButtonDef, DeviceMsg, DisplayChange, DisplaySettings, HostMsg, PanelDef, PanelValue, TabDef, PROTO_CUSTOM_TABS,
+    PROTO_VERSION,
+};
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// The device says hello on boot and in reply to ours, well within this.
@@ -77,8 +82,8 @@ struct Cli {
     #[arg(long)]
     settings: bool,
 
-    /// With --settings: the section to open on (device, buttons, stats,
-    /// notifications, firmware, about)
+    /// With --settings: the section to open on (device, buttons, stats, tabs,
+    /// custom, notifications, firmware, about)
     #[arg(long, requires = "settings")]
     page: Option<String>,
 }
@@ -158,6 +163,11 @@ struct Host {
     flashing: firmware::Flashing,
     api: api::Service,
     commands: Receiver<Command>,
+    /// Refreshes custom tabs' panels, for the tabs the deck shows.
+    panels: Panels,
+    /// What each custom tab's panels show, by tab id and place, for a deck
+    /// that says hello.
+    panel_values: BTreeMap<(String, usize), PanelValue>,
 }
 
 impl Host {
@@ -179,13 +189,15 @@ impl Host {
             strangers: HashSet::new(),
             collector: new_collector(&cfg),
             flashing: firmware::Flashing::new(&cfg),
-            cfg,
             updates: None,
             firmware_boards: None,
             notifications: None,
             seen_apps: notifications::SeenApps::load(),
             api: api::Service::start(status, tx),
             commands,
+            panels: Panels::start(cfg.tabs.clone()),
+            panel_values: BTreeMap::new(),
+            cfg,
         };
         host.start_watchers();
         host
@@ -255,6 +267,8 @@ impl Host {
 
     /// Wait between connection attempts, still answering commands.
     fn idle(&mut self, wait: Duration) {
+        // No deck, so no panels to refresh.
+        self.panels.show(HashSet::new());
         self.publish_update();
         let until = Instant::now() + wait;
         while let Ok(cmd) = self.commands.recv_timeout(until.saturating_duration_since(Instant::now()))
@@ -294,6 +308,10 @@ impl Host {
                 cfg.stats.removable,
                 cfg.stats.battery,
             );
+        }
+        if cfg.tabs != self.cfg.tabs {
+            self.panels.configure(cfg.tabs.clone());
+            self.panel_values.clear();
         }
         if cfg.updates.firmware != self.cfg.updates.firmware {
             self.flashing = firmware::Flashing::new(&cfg);
@@ -378,8 +396,21 @@ impl Host {
         // The deck has this session's buttons. They're only sent while it
         // shows its Controls tab.
         let mut buttons_sent = false;
+        // The deck takes custom tabs (v7), once it says so in its hello.
+        let mut custom_tabs = false;
+        // The custom tabs whose panels are being refreshed.
+        let mut panels_shown: HashSet<String> = HashSet::new();
+        self.panels.show(HashSet::new());
 
         loop {
+            // Kept for whenever the deck says hello, and sent now if it has.
+            for u in self.panels.updates().collect::<Vec<_>>() {
+                if custom_tabs {
+                    conn.send(&HostMsg::Panel { tab: u.tab.clone(), i: u.index, value: u.value.clone() })?;
+                }
+                self.panel_values.insert((u.tab, u.index), u.value);
+            }
+
             let available = self.publish_update();
             if let Some(a) = available.filter(|a| said_hello && a.seq != notified) {
                 let text = format!("Update available: nerd-deck {}", a.version);
@@ -416,6 +447,9 @@ impl Host {
                                 buttons_sent = shows(deck_display.as_ref(), "controls");
                                 if buttons_sent {
                                     send_buttons(&self.cfg, &mut conn, tile)?;
+                                }
+                                if custom_tabs {
+                                    send_tabs(&self.cfg, &mut conn, &self.panel_values)?;
                                 }
                             }
                         }
@@ -510,6 +544,7 @@ impl Host {
                         said_hello = true;
                         // It may have rebooted, and lost them.
                         buttons_sent = false;
+                        custom_tabs = *proto >= PROTO_CUSTOM_TABS;
                         tile = *t;
                         deck_display = display.clone();
                         deck_fw = fw.clone();
@@ -537,9 +572,24 @@ impl Host {
                             return Ok(SessionEnd::Flash(port, fw));
                         }
                     }
+                    let hello = matches!(msg, DeviceMsg::Hello { .. });
                     handle(&self.cfg, &mut conn, msg)?;
+                    // Its custom tabs, which it answers with where they are.
+                    if hello && custom_tabs {
+                        send_tabs(&self.cfg, &mut conn, &self.panel_values)?;
+                    }
                     // Only what the deck shows is read and sent.
                     self.collector.show(deck_display.as_ref().map(Shown::of).unwrap_or_default());
+                    let shown: HashSet<String> = match &deck_display {
+                        Some(d) if custom_tabs => {
+                            self.cfg.tabs.iter().filter(|t| d.has_tab(&t.id) && d.shows(&t.id)).map(|t| t.id.clone()).collect()
+                        }
+                        _ => HashSet::new(),
+                    };
+                    if shown != panels_shown {
+                        self.panels.show(shown.clone());
+                        panels_shown = shown;
+                    }
                     if said_hello && !buttons_sent && shows(deck_display.as_ref(), "controls") {
                         send_buttons(&self.cfg, &mut conn, tile)?;
                         buttons_sent = true;
@@ -638,6 +688,45 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
         DeviceMsg::Image { .. } => {}
         DeviceMsg::Display(_) => {}
         DeviceMsg::Unknown => log::debug!("ignoring unknown device message"),
+    }
+    Ok(())
+}
+
+/// The custom tabs (v7): which there are, then each one's look and what its
+/// panels show so far. The deck says where they go in its `display` reply.
+fn send_tabs(cfg: &Config, conn: &mut Connection, values: &BTreeMap<(String, usize), PanelValue>) -> Result<()> {
+    let ids = cfg.tabs.iter().map(|t| t.id.clone()).collect();
+    conn.send(&HostMsg::Tabs { ids })?;
+    for tab in &cfg.tabs {
+        // Validated: the panels fit.
+        let at = tab.layout().unwrap_or_default();
+        let panels = tab
+            .panels
+            .iter()
+            .zip(at)
+            .map(|(p, at)| PanelDef {
+                style: match p.kind {
+                    config::PanelKind::Status => "status",
+                    config::PanelKind::Text => "text",
+                    config::PanelKind::Url | config::PanelKind::Command => "value",
+                },
+                title: notifications::clean(&p.title, config::MAX_PANEL_TITLE_LEN),
+                at,
+                span: p.span,
+            })
+            .collect();
+        conn.send(&HostMsg::Tab(TabDef {
+            id: tab.id.clone(),
+            name: notifications::clean(&tab.name, config::MAX_TAB_NAME_LEN),
+            icon: tab.icon.as_deref().and_then(icons::lookup).map(String::from).unwrap_or_default(),
+            grid: tab.grid,
+            panels,
+        }))?;
+        for i in 0..tab.panels.len() {
+            if let Some(value) = values.get(&(tab.id.clone(), i)) {
+                conn.send(&HostMsg::Panel { tab: tab.id.clone(), i, value: value.clone() })?;
+            }
+        }
     }
     Ok(())
 }
