@@ -1,7 +1,7 @@
 # Builds the device firmware (firmware/package.sh) on every push and pull request
 # that touches it, and keeps it as a run artifact. Pushing a firmware-v* tag also
-# publishes it as a GitHub release, with notes listing the firmware's commits since
-# its previous release (.github/scripts/release-notes.sh):
+# publishes it as a release on git.hazaar.dev, with notes listing the firmware's
+# commits since its previous release (.github/scripts/release-notes.sh):
 #
 #   (bump FW_VERSION in firmware/src/config.hpp, commit)
 #   git tag firmware-v1.2.3 && git push origin main firmware-v1.2.3
@@ -33,7 +33,18 @@ jobs:
   firmware:
     name: Build firmware
     runs-on: docker
+    # The runner's own image is Alpine, whose musl the ESP32 toolchains can't run on.
+    container:
+      image: ubuntu:22.04
     steps:
+      - name: Install tools
+        # Node for the JavaScript actions; Python for PlatformIO.
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq curl ca-certificates git python3 python3-venv >/dev/null
+          curl -fsSL https://deb.nodesource.com/setup_24.x | bash - >/dev/null
+          apt-get install -y -qq nodejs >/dev/null
+
       - name: Checkout code
         uses: actions/checkout@v7
         with:
@@ -75,17 +86,21 @@ jobs:
           path: firmware/dist/
 
       - name: Release notes
+        id: notes
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          .github/scripts/release-notes.sh "$TAG" "$GITHUB_REPOSITORY" > notes.md
-          cat notes.md
+          # The checkout belongs to another uid than the container's root.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          notes=$(.github/scripts/release-notes.sh "$TAG" "$GITHUB_REPOSITORY")
+          echo "$notes"
+          { echo 'notes<<NOTES_END'; echo "$notes"; echo NOTES_END; } >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v3
+        uses: actions/forgejo-release@v2
         with:
-          name: nerd-deck firmware ${{ env.VERSION }}
-          body_path: notes.md
+          direction: upload
+          title: nerd-deck firmware ${{ env.VERSION }}
+          release-dir: firmware/dist
+          release-notes: ${{ steps.notes.outputs.notes }}
           prerelease: ${{ env.PRERELEASE }}
-          make_latest: false
-          files: firmware/dist/*

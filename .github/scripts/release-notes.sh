@@ -11,7 +11,8 @@
 # before the split were tagged v* and covered both; the first of each side
 # counts from the last of those.
 #
-# With owner/repo, ends with a link to the full diff on GitHub.
+# With owner/repo, ends with a link to the full diff on the server in
+# $GITHUB_SERVER_URL (which Forgejo sets too), or on GitHub.
 set -euo pipefail
 
 tag=${1:?usage: release-notes.sh <tag> [owner/repo]}
@@ -73,10 +74,13 @@ for type in "${types[@]}" other; do
     printf '%s' "${section[$type]}"
 done
 if [[ -n $repo ]]; then
+    server=${GITHUB_SERVER_URL:-https://github.com}
     echo
     if [[ -n $prev ]]; then
-        echo "**Full diff:** https://github.com/$repo/compare/$prev...$tag"
+        echo "**Full diff:** $server/$repo/compare/$prev...$tag"
+    elif [[ $server == https://github.com ]]; then
+        echo "**Full history:** $server/$repo/commits/$tag"
     else
-        echo "**Full history:** https://github.com/$repo/commits/$tag"
+        echo "**Full history:** $server/$repo/commits/tag/$tag"
     fi
 fi
