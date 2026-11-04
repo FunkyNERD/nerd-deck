@@ -21,6 +21,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,6 +51,8 @@ enum Kind {
 pub struct Gpu {
     /// The latest reading; None once the GPU turns out to be unreadable.
     latest: Arc<Mutex<Option<GpuStats>>>,
+    /// Set while the deck's System tab is off: nothing is read.
+    paused: Arc<AtomicBool>,
 }
 
 impl Gpu {
@@ -60,11 +63,17 @@ impl Gpu {
         log::info!("watching the GPU at {}", device.display());
         let latest = Arc::new(Mutex::new(Some(GpuStats { asleep: true, ..Default::default() })));
         let shared = latest.clone();
+        let paused = Arc::new(AtomicBool::new(false));
+        let paused_shared = paused.clone();
         thread::Builder::new()
             .name("gpu".into())
-            .spawn(move || watch(kind, &device, &shared))
+            .spawn(move || watch(kind, &device, &shared, &paused_shared))
             .ok()?;
-        Some(Self { latest })
+        Some(Self { latest, paused })
+    }
+
+    pub fn pause(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Relaxed);
     }
 
     pub fn latest(&self) -> Option<GpuStats> {
@@ -72,9 +81,13 @@ impl Gpu {
     }
 }
 
-fn watch(kind: Kind, device: &Path, latest: &Mutex<Option<GpuStats>>) {
+fn watch(kind: Kind, device: &Path, latest: &Mutex<Option<GpuStats>>, paused: &AtomicBool) {
     let mut poller = Poller::default();
     loop {
+        if paused.load(Ordering::Relaxed) {
+            thread::sleep(POLL);
+            continue;
+        }
         let now = Instant::now();
         match poller.poll(awake(device), now) {
             Step::Asleep => *latest.lock().unwrap() = Some(GpuStats { asleep: true, ..Default::default() }),

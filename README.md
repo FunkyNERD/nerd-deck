@@ -124,8 +124,10 @@ button's label can have its own colour (`color = "#FFA726"`). See
 
 The header has a pill per tab: System, Network, Storage, Battery and Controls.
 The open tab's pill shows its name; the others show just an icon. Tap one, or
-swipe between them. The order, and the tab the deck opens on, are yours to set
-in the settings window, while the deck is connected. Each deck keeps its own.
+swipe between them. The order, the tab the deck opens on, and which tabs show
+at all are yours to set in the settings window, while the deck is connected.
+Each deck keeps its own. A tab that's turned off costs nothing: nerd-deck
+doesn't read its stats (firmware 0.11.0 and later).
 
 **System** shows the CPU, memory (with swap as a note beside it), uptime and
 per-core load. Under memory is the GPU, if the PC has one it can read (NVIDIA
@@ -186,7 +188,8 @@ icon) opens a window for everything in the config:
   reorder them.
 - **Stats:** update interval, network interface, battery, and which disks the
   Storage tab shows, in what order.
-- **Deck tabs:** the order of the deck's tabs, with a preview of its header.
+- **Deck tabs:** the order of the deck's tabs and which are on, with a
+  preview of its header.
 - **Notifications:** on or off, which apps (each app that has sent one is
   listed), message text, Do Not Disturb, low-urgency ones, and test
   notifications for the deck.

@@ -1,6 +1,6 @@
 import { Theme, Glyphs } from "../theme.slint";
 import { Backend } from "../backend.slint";
-import { Card, Glyph, SectionTitle, PushButton } from "../widgets.slint";
+import { Card, Glyph, SectionTitle, PushButton, Toggle } from "../widgets.slint";
 
 // The logo's three bars, as the System tab's icon: 30, 56 and 40 tall, 14
 // wide and 6 apart in the logo's own units. Grey when `dim`.
@@ -36,7 +36,7 @@ component Tag inherits Rectangle {
     }
 }
 
-// The deck's header in the current order, opened on the first tab.
+// The deck's header: the tabs that are on, in order, opened on the first.
 component HeaderPreview inherits Rectangle {
     width: 480px;
     height: 44px;
@@ -59,7 +59,7 @@ component HeaderPreview inherits Rectangle {
         height: 34px;
         spacing: 4px;
         alignment: start;
-        for tab[i] in Backend.tabs: Rectangle {
+        for tab[i] in Backend.header-tabs: Rectangle {
             min-width: 52px;
             border-radius: 17px;
             background: i == 0 ? Theme.card : transparent;
@@ -117,7 +117,9 @@ export component TabsPage inherits VerticalLayout {
         spacing: 12px;
         SectionTitle {
             title: "Tab order";
-            subtitle: Backend.deck-settings ? "Use a tab's arrows to move it. The deck updates straight away." : Backend.deck-settings-note;
+            subtitle: !Backend.deck-settings ? Backend.deck-settings-note
+                : Backend.can-hide-tabs ? "Use a tab's arrows to move it, and its switch to leave it off the deck; its stats aren't read then. The deck updates straight away."
+                : "Use a tab's arrows to move it. The deck updates straight away. Update its firmware to turn tabs off.";
             horizontal-stretch: 1;
         }
         VerticalLayout {
@@ -151,6 +153,7 @@ export component TabsPage inherits VerticalLayout {
                     }
                     VerticalLayout {
                         alignment: center;
+                        opacity: tab.on ? 1 : 0.5;
                         Rectangle {
                             width: 36px;
                             height: 36px;
@@ -166,14 +169,25 @@ export component TabsPage inherits VerticalLayout {
                         alignment: center;
                         spacing: 2px;
                         horizontal-stretch: 1;
+                        opacity: tab.on ? 1 : 0.5;
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: start;
                             Text { text: tab.name; font-size: 14px; color: Theme.text; vertical-alignment: center; }
-                            if tab.start: Tag { text: "Opens first"; fg: Theme.cyan; edge: #1D5A63; }
+                            if tab.start && tab.on: Tag { text: "Opens first"; fg: Theme.cyan; edge: #1D5A63; }
+                            if !tab.on: Tag { text: "Off"; }
                             if tab.laptop: Tag { text: "Laptops only"; }
                         }
                         Text { text: tab.desc; font-size: 12px; color: Theme.text-dim; overflow: elide; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        Toggle {
+                            checked: tab.on;
+                            enabled: Backend.deck-settings && Backend.can-hide-tabs && !tab.last;
+                            label: "Show " + tab.name;
+                            toggled(on) => { Backend.set-tab-on(i, on); }
+                        }
                     }
                     PushButton {
                         icon: Glyphs.up;

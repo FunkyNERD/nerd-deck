@@ -577,9 +577,14 @@ impl State {
         let order = d.tab_order();
         b.set_brightness(d.brightness.into());
 
-        let first = tab_info(order[0]).0;
+        b.set_can_hide_tabs(d.hidden.is_some());
+        let first_on = order.iter().copied().find(|t| d.shows(t)).unwrap_or(order[0]);
+        let first = tab_info(first_on).0;
         let starts: Vec<SharedString> = std::iter::once(format!("First tab ({first})"))
-            .chain(TABS.iter().map(|t| tab_info(t).0.to_owned()))
+            .chain(TABS.iter().map(|t| {
+                let name = tab_info(t).0;
+                if d.shows(t) { name.to_owned() } else { format!("{name} (off)") }
+            }))
             .map(Into::into)
             .collect();
         b.set_start_options(ModelRc::new(VecModel::from(starts)));
@@ -596,7 +601,9 @@ impl State {
         b.set_temp_hot(d.temp_hot.into());
         b.set_flip(d.flip);
 
-        let opens = if d.start == "first" { order[0] } else { d.start.as_str() };
+        // A start tab that's off gives way to the first that's on, as on the deck.
+        let opens = if d.start == "first" || !d.shows(&d.start) { first_on } else { d.start.as_str() };
+        let on_count = order.iter().filter(|t| d.shows(t)).count();
         let rows: Vec<TabRow> = order
             .iter()
             .map(|id| {
@@ -614,9 +621,13 @@ impl State {
                     }),
                     start: *id == opens,
                     laptop: *id == "battery",
+                    on: d.shows(id),
+                    last: on_count == 1 && d.shows(id),
                 }
             })
             .collect();
+        let header: Vec<TabRow> = rows.iter().filter(|r| r.on).cloned().collect();
+        b.set_header_tabs(ModelRc::new(VecModel::from(header)));
         b.set_tabs(ModelRc::new(VecModel::from(rows)));
     }
 
@@ -1597,6 +1608,20 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
         }
         order.swap(from, to);
         Some(DisplayChange { tabs: Some(order), ..Default::default() })
+    });
+    deck!(on_set_tab_on, false, |ui, d, index, on| {
+        let order = d.tab_order();
+        let Some(tab) = order.get(index as usize) else { return };
+        let mut hidden = d.hidden.clone().unwrap_or_default();
+        hidden.retain(|t| t != tab);
+        if !on {
+            hidden.push((*tab).to_owned());
+        }
+        // One stays on.
+        if !TABS.iter().any(|t| !hidden.iter().any(|h| h == t)) {
+            return;
+        }
+        Some(DisplayChange { hidden: Some(hidden), ..Default::default() })
     });
     deck!(on_reset_tabs, false, |ui, d| {
         Some(DisplayChange { tabs: Some(TABS.iter().map(|t| (*t).to_owned()).collect()), ..Default::default() })

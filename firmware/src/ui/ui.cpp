@@ -44,7 +44,8 @@ const lv_color_t kRxColor = lv_color_hex(kCyan);
 const lv_color_t kTxColor = lv_color_hex(kOrange);
 
 // Header: one pill per tab, icon only but for the open tab's, which also
-// shows its name. The Battery tab is left out on hosts without a battery.
+// shows its name. Tabs turned off are left out, and so is Battery on hosts
+// without a battery.
 enum Tab : uint8_t { kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls, kTabCount };
 constexpr const char* kTabIcons[kTabCount] = {"" /* the logo, drawn */, LV_SYMBOL_WIFI, LV_SYMBOL_DRIVE,
                                               LV_SYMBOL_BATTERY_FULL, LV_SYMBOL_KEYBOARD};
@@ -61,8 +62,13 @@ lv_obj_t* tabPillNames[kTabCount];
 lv_obj_t* logoBars[3];
 uint16_t currentTab = kTabSystem;
 bool hasBattery = false;
+// The tab order as set, and the tabs turned off (a bit each).
+uint8_t tabOrder[kTabCount] = {kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls};
+uint8_t hiddenTabs = 0;
 // The tab at each position, and each tab's position: the tabview's pages and
-// the header's pills are both kept in this order, so swipes follow it.
+// the header's pills are both kept in this order, so swipes follow it. The
+// shown tabs come first, in tabOrder; the rest follow, hidden, so a swipe
+// never reaches them.
 uint8_t tabAt[kTabCount] = {kTabSystem, kTabNetwork, kTabStorage, kTabBattery, kTabControls};
 uint8_t tabPos[kTabCount] = {0, 1, 2, 3, 4};
 int8_t startTab = settings::kStartFirst;
@@ -357,12 +363,16 @@ void openTab(uint16_t tab, lv_anim_enable_t anim) {
     styleTabPills();
 }
 
-// The tab to open on: the start tab, or the first in order, but never a
-// Battery tab that isn't shown.
+// Turned on, and for Battery, the host has one.
+bool shown(uint8_t tab) { return !(hiddenTabs & (1u << tab)) && (tab != kTabBattery || hasBattery); }
+
+// Turned off: its page isn't drawn, so its stats needn't be either.
+bool turnedOff(uint8_t tab) { return hiddenTabs & (1u << tab); }
+
+// The tab to open on: the start tab if it's shown, else the first shown.
 uint16_t startingTab() {
-    const auto shown = [](int t) { return t >= 0 && (t != kTabBattery || hasBattery); };
-    if (shown(startTab)) return startTab;
-    return shown(tabAt[0]) ? tabAt[0] : tabAt[1];
+    if (startTab >= 0 && shown(startTab)) return startTab;
+    return tabAt[0];
 }
 
 void onTabPill(lv_event_t* e) {
@@ -370,34 +380,46 @@ void onTabPill(lv_event_t* e) {
     openTab(static_cast<uint16_t>(reinterpret_cast<uintptr_t>(lv_event_get_user_data(e))), LV_ANIM_ON);
 }
 
-// After a swipe. Without a battery, its tab is skipped in the swipe's direction.
+// After a swipe. Hidden pages are out of the tabview's layout, so it only
+// lands on shown ones.
 void onTabSwiped(lv_event_t*) {
-    const uint16_t pos = lv_tabview_get_tab_act(tabview);
-    uint16_t tab = tabAt[pos];
+    const uint16_t tab = tabAt[lv_tabview_get_tab_act(tabview)];
     if (tab == currentTab) return;
     userNavigated = true;
-    if (tab == kTabBattery && !hasBattery) {
-        const int step = pos > tabPos[currentTab] ? 1 : -1;
-        const int next = pos + step;
-        tab = tabAt[next >= 0 && next < kTabCount ? next : pos - step];
-    }
-    if (tabPos[tab] != pos) openTab(tab, LV_ANIM_ON);
-    else {
-        currentTab = tab;
-        styleTabPills();
-    }
+    currentTab = tab;
+    styleTabPills();
 }
 
-// Puts the pages and pills in `order`, keeping the open tab open.
-void setTabOrder(const uint8_t* order) {
+// Puts the shown tabs' pages and pills first, in tabOrder, and hides the rest
+// after them. The open tab stays open while it's shown; until someone picks a
+// tab, the start tab opens.
+void arrangeTabs() {
+    bool any = false;
+    for (uint8_t t = 0; t < kTabCount; t++) any |= shown(t);
+    // Battery alone is turned on, on a host without one: System, rather than nothing.
+    const auto on = [any](uint8_t t) { return any ? shown(t) : t == kTabSystem; };
+    uint8_t n = 0;
+    for (uint8_t t : tabOrder)
+        if (on(t)) tabAt[n++] = t;
+    const uint8_t shownCount = n;
+    for (uint8_t t : tabOrder)
+        if (!on(t)) tabAt[n++] = t;
     for (uint8_t pos = 0; pos < kTabCount; pos++) {
-        tabAt[pos] = order[pos];
-        tabPos[order[pos]] = pos;
-        lv_obj_move_to_index(tabPages[order[pos]], pos);
-        lv_obj_move_to_index(tabPills[order[pos]], pos);
+        const uint8_t t = tabAt[pos];
+        tabPos[t] = pos;
+        lv_obj_move_to_index(tabPages[t], pos);
+        lv_obj_move_to_index(tabPills[t], pos);
+        if (pos < shownCount) {
+            lv_obj_clear_flag(tabPages[t], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(tabPills[t], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(tabPages[t], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(tabPills[t], LV_OBJ_FLAG_HIDDEN);
+        }
     }
     lv_obj_update_layout(tabview);
-    lv_tabview_set_act(tabview, tabPos[currentTab], LV_ANIM_OFF);
+    if (!userNavigated || tabPos[currentTab] >= shownCount) currentTab = startingTab();
+    openTab(currentTab, LV_ANIM_OFF);
 }
 
 // Sets the backlight for how long the screen has been untouched.
@@ -486,7 +508,6 @@ void buildHeader() {
         }
         tabPillNames[i] = makeLabel(pill, &lv_font_montserrat_14, kText, kTabNames[i]);
     }
-    lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);  // until the host reports a battery
     styleTabPills();
 
     // Battery: bolt (while charging), outline with fill, percentage. Hidden
@@ -1323,14 +1344,11 @@ void onNetSample(float rx, float tx) {
 }
 
 // The Battery tab comes and goes with the host's battery; if it goes while
-// open, System opens instead.
+// open, the start tab opens instead.
 void showBatteryTab(bool show) {
     if (show == hasBattery) return;
     hasBattery = show;
-    if (show) lv_obj_clear_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(tabPills[kTabBattery], LV_OBJ_FLAG_HIDDEN);
-    if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);  // it may be the start tab
-    else if (!show && currentTab == kTabBattery) openTab(startingTab(), LV_ANIM_OFF);
+    arrangeTabs();
 }
 
 void updateBattery(const HostStats& s) {
@@ -1556,56 +1574,8 @@ void updateBatteryTab(const HostStats& s) {
     else lv_label_set_text(batTemp, "--");
 }
 
-}  // namespace
-
-void init() {
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(kBg), 0);
-
-    tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 0);  // the header is drawn by buildHeader()
-    lv_obj_set_style_bg_color(tabview, lv_color_hex(kBg), 0);
-    lv_obj_set_style_bg_opa(tabview, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
-
-    // In Tab order.
-    lv_obj_t** tabs = tabPages;
-    for (uint16_t i = 0; i < kTabCount; i++) {
-        tabs[i] = lv_tabview_add_tab(tabview, kTabNames[i]);
-        lv_obj_set_style_pad_all(tabs[i], kGap, 0);
-        lv_obj_set_style_pad_top(tabs[i], kHeaderH + 3, 0);
-    }
-    buildHeader();
-    buildSystemTab(tabs[kTabSystem]);
-    buildNetworkTab(tabs[kTabNetwork]);
-    buildStorageTab(tabs[kTabStorage]);
-    buildBatteryTab(tabs[kTabBattery]);
-    buildControlsTab(tabs[kTabControls]);
-    buildOverlays();
-    buildPower();
-#ifdef NERD_START_TAB
-    // Debug: open on a given tab (0 System, 1 Network, 2 Storage, 3 Battery, 4 Controls).
-    userNavigated = true;
-    openTab(NERD_START_TAB, LV_ANIM_OFF);
-#endif
-}
-
-void applyDisplay(const settings::Display& d) {
-    display::setFlipped(d.flip);
-    setTabOrder(d.tabs);
-    startTab = d.start;
-    if (!userNavigated) openTab(startingTab(), LV_ANIM_OFF);
-    brightness = d.brightness;
-    dimAfterMs = d.dimAfterS * 1000;
-    offAfterMs = d.offAfterS * 1000;
-    tempWarm = d.tempWarm;
-    tempHot = d.tempHot;
-    powerTick(nullptr);
-}
-
-void updateStats(const HostStats& s) {
+void updateSystemTab(const HostStats& s) {
     char a[16], b[16], buf[160];
-
-    updateBattery(s);
-    updateBatteryTab(s);
 
     // CPU
     animateCpu(static_cast<int32_t>(s.cpu.usage + 0.5f));
@@ -1701,8 +1671,10 @@ void updateStats(const HostStats& s) {
     lv_label_set_text(hostLabel, s.host[0] ? s.host : "-");
     fmtUptime(s.uptime, a, sizeof a);
     lv_label_set_text(uptimeLabel, a);
+}
 
-    // Network
+void updateNetworkTab(const HostStats& s) {
+    char a[16];
     if (s.net.iface[0]) {
         char iface[sizeof s.net.iface];
         for (size_t i = 0; i < sizeof iface; i++) iface[i] = toupper(static_cast<unsigned char>(s.net.iface[i]));
@@ -1715,8 +1687,10 @@ void updateStats(const HostStats& s) {
     fmtBytes(s.net.tx_bps, a, sizeof a);
     lv_label_set_text_fmt(txLabel, "%s/s", a);
     onNetSample(static_cast<float>(s.net.rx_bps), static_cast<float>(s.net.tx_bps));
+}
 
-    // Disks
+void updateStorageTab(const HostStats& s) {
+    char a[16], b[16];
     layoutDisks(s.disk_count);
     for (size_t i = 0; i < s.disk_count; i++) {
         const auto& d = s.disks[i];
@@ -1743,6 +1717,63 @@ void updateStats(const HostStats& s) {
         lv_label_set_text_fmt(c.io, "#%06X " LV_SYMBOL_DOWNLOAD " %s%s#  #%06X " LV_SYMBOL_UPLOAD " %s%s#",
                               static_cast<unsigned>(kCyan), r, per, static_cast<unsigned>(kOrange), w, per);
     }
+}
+
+}  // namespace
+
+void init() {
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(kBg), 0);
+
+    tabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 0);  // the header is drawn by buildHeader()
+    lv_obj_set_style_bg_color(tabview, lv_color_hex(kBg), 0);
+    lv_obj_set_style_bg_opa(tabview, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(lv_tabview_get_content(tabview), LV_OPA_TRANSP, 0);
+
+    // In Tab order.
+    lv_obj_t** tabs = tabPages;
+    for (uint16_t i = 0; i < kTabCount; i++) {
+        tabs[i] = lv_tabview_add_tab(tabview, kTabNames[i]);
+        lv_obj_set_style_pad_all(tabs[i], kGap, 0);
+        lv_obj_set_style_pad_top(tabs[i], kHeaderH + 3, 0);
+    }
+    buildHeader();
+    buildSystemTab(tabs[kTabSystem]);
+    buildNetworkTab(tabs[kTabNetwork]);
+    buildStorageTab(tabs[kTabStorage]);
+    buildBatteryTab(tabs[kTabBattery]);
+    buildControlsTab(tabs[kTabControls]);
+    buildOverlays();
+    buildPower();
+    arrangeTabs();  // Battery stays hidden until the host reports one
+#ifdef NERD_START_TAB
+    // Debug: open on a given tab (0 System, 1 Network, 2 Storage, 3 Battery, 4 Controls).
+    userNavigated = true;
+    openTab(NERD_START_TAB, LV_ANIM_OFF);
+#endif
+}
+
+void applyDisplay(const settings::Display& d) {
+    display::setFlipped(d.flip);
+    memcpy(tabOrder, d.tabs, sizeof tabOrder);
+    hiddenTabs = d.hidden;
+    startTab = d.start;
+    arrangeTabs();
+    brightness = d.brightness;
+    dimAfterMs = d.dimAfterS * 1000;
+    offAfterMs = d.offAfterS * 1000;
+    tempWarm = d.tempWarm;
+    tempHot = d.tempHot;
+    powerTick(nullptr);
+}
+
+void updateStats(const HostStats& s) {
+    // The header's battery reading shows on every tab.
+    updateBattery(s);
+    // A tab turned off isn't drawn; its stats are left out too.
+    if (!turnedOff(kTabBattery)) updateBatteryTab(s);
+    if (!turnedOff(kTabSystem)) updateSystemTab(s);
+    if (!turnedOff(kTabNetwork)) updateNetworkTab(s);
+    if (!turnedOff(kTabStorage)) updateStorageTab(s);
 }
 
 void setButtons(const ButtonDef* defs, size_t count) {

@@ -10,7 +10,7 @@ use crate::battery;
 use crate::gpu::Gpu;
 use crate::mounts;
 use crate::power_profile::PowerProfile;
-use crate::protocol::{CpuStats, DiskStats, MemStats, NetStats, Stats, TopProcess};
+use crate::protocol::{CpuStats, DiskStats, DisplaySettings, MemStats, NetStats, Stats, TopProcess};
 
 /// The device shows at most this many disks.
 const MAX_DISKS: usize = 4;
@@ -25,6 +25,27 @@ const SLOW_EVERY: Duration = Duration::from_secs(1);
 
 /// Sensor labels to prefer for CPU temperature, in order.
 const CPU_TEMP_LABELS: &[&str] = &["Package id 0", "Tctl", "Tdie", "k10temp", "coretemp", "cpu"];
+
+/// The deck's tabs whose stats are read. A tab that's turned off costs
+/// nothing; Battery isn't here, since the header shows the battery on every tab.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shown {
+    pub system: bool,
+    pub network: bool,
+    pub storage: bool,
+}
+
+impl Default for Shown {
+    fn default() -> Self {
+        Self { system: true, network: true, storage: true }
+    }
+}
+
+impl Shown {
+    pub fn of(d: &DisplaySettings) -> Self {
+        Self { system: d.shows("system"), network: d.shows("network"), storage: d.shows("storage") }
+    }
+}
 
 pub struct Collector {
     sys: System,
@@ -51,6 +72,7 @@ pub struct Collector {
     slow_read: Option<Instant>,
     /// The last battery reading and when it was taken.
     battery_read: Option<(Instant, Option<crate::protocol::BatteryStats>)>,
+    shown: Shown,
 }
 
 impl Collector {
@@ -75,7 +97,28 @@ impl Collector {
             power_profile: PowerProfile::new(),
             slow_read: None,
             battery_read: None,
+            shown: Shown::default(),
         }
+    }
+
+    /// Reads stats only for the tabs the deck shows.
+    pub fn show(&mut self, shown: Shown) {
+        if shown == self.shown {
+            return;
+        }
+        log::debug!("reading stats for {shown:?}");
+        // Counters are left alone while their tab is off, so start over: a
+        // rate across the whole time it was off would be a spike.
+        if !shown.network {
+            self.net_io.clear();
+        }
+        if !shown.storage {
+            self.disk_io.clear();
+        }
+        if let Some(gpu) = &self.gpu {
+            gpu.pause(!shown.system);
+        }
+        self.shown = shown;
     }
 
     /// Applies changed stats settings.
@@ -88,50 +131,74 @@ impl Collector {
     }
 
     pub fn sample(&mut self) -> Stats {
-        self.sys.refresh_cpu_usage();
-        self.sys.refresh_memory();
+        let shown = self.shown;
+        if shown.system {
+            self.sys.refresh_cpu_usage();
+            self.sys.refresh_memory();
+        }
         // What changes slowly is read at most every SLOW_EVERY, however short
         // the interval: clock speeds (a file per core), disk space, and the
         // CPU's temperature.
         let slow = self.slow_read.is_none_or(|at| at.elapsed() >= SLOW_EVERY);
         if slow {
             self.slow_read = Some(Instant::now());
+        }
+        if slow && shown.system {
             self.sys.refresh_cpu_frequency();
             // Only the CPU's sensor: refreshing them all takes ~45 ms on a laptop.
             if let Some(c) = self.cpu_sensor().and_then(|i| self.components.list_mut().get_mut(i)) {
                 c.refresh();
             }
         }
-        if self.mounts_changed.swap(false, Ordering::Relaxed) {
-            self.disks.refresh_list();
-        } else if slow {
-            self.disks.refresh();
+        // While Storage is off, a mount change waits for it to come back.
+        if shown.storage {
+            if self.mounts_changed.swap(false, Ordering::Relaxed) {
+                self.disks.refresh_list();
+            } else if slow {
+                self.disks.refresh();
+            }
         }
 
         let elapsed = self.last_sample.elapsed().as_secs_f64().max(0.001);
         self.last_sample = Instant::now();
 
-        let load = System::load_average();
-        let net_io = read_net_dev();
-        let net = self.net(&net_io, elapsed);
-        self.net_io = net_io;
-        let io = read_diskstats();
-        let disks = self.disks(&io, elapsed);
-        self.disk_io = io;
-        let gpu = self.gpu.as_ref().and_then(Gpu::latest);
-        let top = if gpu.is_none() { self.top_process() } else { None };
-
-        Stats {
-            host: System::host_name().unwrap_or_default(),
-            uptime: System::uptime(),
-            load: [load.one, load.five, load.fifteen],
-            cpu: self.cpu(),
-            mem: MemStats {
+        let net = if shown.network {
+            let net_io = read_net_dev();
+            let net = self.net(&net_io, elapsed);
+            self.net_io = net_io;
+            Some(net)
+        } else {
+            None
+        };
+        let disks = if shown.storage {
+            let io = read_diskstats();
+            let disks = self.disks(&io, elapsed);
+            self.disk_io = io;
+            Some(disks)
+        } else {
+            None
+        };
+        let (mut load, mut cpu, mut mem, mut gpu, mut top) = (None, None, None, None, None);
+        if shown.system {
+            let l = System::load_average();
+            load = Some([l.one, l.five, l.fifteen]);
+            cpu = Some(self.cpu());
+            mem = Some(MemStats {
                 used: self.sys.used_memory(),
                 total: self.sys.total_memory(),
                 swap_used: self.sys.used_swap(),
                 swap_total: self.sys.total_swap(),
-            },
+            });
+            gpu = self.gpu.as_ref().and_then(Gpu::latest);
+            top = if gpu.is_none() { self.top_process() } else { None };
+        }
+
+        Stats {
+            host: System::host_name().unwrap_or_default(),
+            uptime: System::uptime(),
+            load,
+            cpu,
+            mem,
             net,
             disks,
             gpu,

@@ -41,6 +41,12 @@ if nothing arrives for that interval plus 2 s (at least 3 s; see `stats_ms` in
               "ac": true, "charger_w": 64}
 }
 ```
+`load`, `cpu`, `mem` and `gpu`/`top` (the System tab), `net` (Network) and
+`disks` (Storage) are left out while the deck has that tab turned off (see
+`hidden` under `display`); the host doesn't read them then. `host` and `uptime`
+always come: `stats` is also how the device knows the host is there. Added in
+firmware 0.11.0, without a protocol change; the host only leaves them out for a
+deck that reports `hidden`.
 Sizes are bytes, rates are bytes/s, `usage` is a percentage, and `temp` is °C
 (left out when no sensor is found). The device shows at most 32 cores and 4 disks;
 `removable` marks a USB drive or SD card (protocol v5; false when left out), and
@@ -76,6 +82,8 @@ doesn't report it (`state` and `ac` are always there).
 The layout for the Controls tab: up to 12 buttons, shown 4×3. Sent whenever the
 device says `hello` (which it does in reply to the host's), and when the config
 is reloaded. The device then rebuilds the grid and frees any previous images.
+While the deck has Controls turned off (`hidden`), the host holds them back,
+and sends them when it's turned on.
 ```json
 {"type":"buttons","buttons":[
   {"id":"mute","label":"Mute","icon":"\uF026"},
@@ -143,15 +151,22 @@ settings window), plus `stats_ms` after each `hello` and config reload. Before,
 the host sent them all from its config after every `hello`. The device answers
 with its own `display`.
 ```json
-{"type":"display","tabs":["controls","system","network","storage","battery"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false,"stats_ms":1000}
+{"type":"display","tabs":["controls","system","network","storage","battery"],"hidden":["storage"],"start":"first","brightness":80,"dim_after":300,"off_after":600,"temp_warm":70,"temp_hot":85,"flip":false,"stats_ms":1000}
 ```
 - `tabs`: the tab order, by `system`, `network`, `storage`, `battery` and
   `controls`. The pills in the header and swiping both follow it. Tabs left out
   follow in that order; unknown names are skipped. Battery only shows when
   `stats` has a battery.
-- `start`: the tab the device opens on, or `first` for the first in `tabs`. If
-  it's `battery` and there's no battery, the first tab instead. It only moves
-  the device to that tab until someone picks one.
+- `hidden`: tabs turned off, by the same names. They're left out of the header
+  and swipes, and keep their place in `tabs` for when they're turned back on.
+  The whole list replaces the stored one; `[]` turns every tab on. One that
+  would turn every tab off is ignored. Added in firmware
+  0.11.0, without a protocol change; older firmware ignores it, and leaves it
+  out of its own `display`.
+- `start`: the tab the device opens on, or `first` for the first shown in
+  `tabs`. If that tab is off, or it's `battery` and there's no battery, the
+  first shown tab instead. It only moves the device to that tab until someone
+  picks one.
 - `brightness`: backlight percent, 5-100.
 - `dim_after`: seconds untouched before the backlight dims to 20%; 0 never
   dims. The tap that wakes it doesn't press anything.
@@ -182,8 +197,8 @@ on a matching board. Firmware before v3 doesn't send it, and only ever ran on
 `wt32-sc01-plus`. `tile` (v5) is a Controls button's face in pixels, inside its
 border: the size button images are made to fill.
 ```json
-{"type":"hello","fw":"0.10.0","proto":6,"board":"wt32-sc01-plus","tile":[108,81],
- "display":{"tabs":["system","network","storage","battery","controls"],"start":"first",
+{"type":"hello","fw":"0.11.0","proto":6,"board":"wt32-sc01-plus","tile":[108,81],
+ "display":{"tabs":["system","network","storage","battery","controls"],"hidden":[],"start":"first",
             "brightness":80,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}}
 ```
 `display` holds the settings the device keeps, with every field of the host's
@@ -194,7 +209,7 @@ change; the host only lets someone change them on a device that reports them.
 The device's settings after a host `display` message, the same as `display` in
 its `hello`. Added in firmware 0.10.0.
 ```json
-{"type":"display","tabs":["system","network","storage","battery","controls"],"start":"first","brightness":40,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}
+{"type":"display","tabs":["system","network","storage","battery","controls"],"hidden":[],"start":"first","brightness":40,"dim_after":0,"off_after":300,"temp_warm":75,"temp_hot":90,"flip":false}
 ```
 
 ### `image`

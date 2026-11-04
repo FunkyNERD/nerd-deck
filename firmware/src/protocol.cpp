@@ -45,6 +45,9 @@ void writeDisplay(JsonObject o, const settings::Display& d) {
     o["temp_warm"] = d.tempWarm;
     o["temp_hot"] = d.tempHot;
     o["flip"] = d.flip;
+    JsonArray hidden = o["hidden"].to<JsonArray>();
+    for (uint8_t t = 0; t < kTabCount; t++)
+        if (d.hidden & (1u << t)) hidden.add(kTabIds[t]);
 }
 
 void sendDisplay(const settings::Display& d) {
@@ -192,7 +195,8 @@ void handleNotification(JsonObjectConst o) {
 }
 
 // Missing or unknown fields keep the stored values; tabs left out of `tabs`
-// follow in their default order. Replies with what's now stored.
+// follow in their default order, and `hidden` replaces the tabs turned off.
+// Replies with what's now stored.
 void handleDisplay(JsonObjectConst o) {
     using namespace settings;
     Display d = load();
@@ -208,6 +212,16 @@ void handleDisplay(JsonObjectConst o) {
         }
         for (uint8_t t = 0; t < kTabCount; t++)
             if (!placed[t]) d.tabs[n++] = t;
+    }
+    // Ignored if it would turn every tab off.
+    JsonArrayConst hidden = o["hidden"];
+    if (!hidden.isNull()) {
+        uint8_t mask = 0;
+        for (const char* id : hidden) {
+            const int8_t t = id ? tabFromName(id) : -1;
+            if (t >= 0) mask |= 1u << t;
+        }
+        if (mask != kAllTabs) d.hidden = mask;
     }
     if (const char* start = o["start"]) {
         const int8_t t = tabFromName(start);

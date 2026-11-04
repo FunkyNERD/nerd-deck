@@ -11,6 +11,8 @@ namespace settings {
 constexpr uint8_t kTabCount = 5;
 constexpr const char* kTabIds[kTabCount] = {"system", "network", "storage", "battery", "controls"};
 constexpr int8_t kStartFirst = -1;
+// A bit per tab, by its index in kTabIds.
+constexpr uint8_t kAllTabs = (1u << kTabCount) - 1;
 
 struct Display {
     uint8_t tabs[kTabCount];  // tab at each position
@@ -20,6 +22,7 @@ struct Display {
     uint32_t offAfterS;       // on the waiting screen; 0 = never
     uint8_t tempWarm, tempHot;  // °C: the CPU temperature shows orange, then red
     bool flip;                  // upside down, for the USB cable on the other side
+    uint8_t hidden;             // tabs turned off, a bit each; never all of them
 };
 
 // The tab named `id`, or -1.

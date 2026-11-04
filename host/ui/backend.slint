@@ -53,6 +53,10 @@ export struct TabRow {
     start: bool,
     // Only shown on PCs with a battery.
     laptop: bool,
+    // Turned on, so the deck shows it.
+    on: bool,
+    // The only one on, so it can't be turned off.
+    last: bool,
 }
 
 export struct AppRow {
@@ -168,7 +172,12 @@ export global Backend {
     in property <bool> flip;
     callback set-flip(bool);
     in property <[TabRow]> tabs;
+    // The tabs that are on, for the header preview.
+    in property <[TabRow]> header-tabs;
+    // The deck's firmware can turn tabs off (0.11.0).
+    in property <bool> can-hide-tabs;
     callback move-tab(int, int);
+    callback set-tab-on(int, bool);
     callback reset-tabs();
 
     // Switches, set through set-flag with these keys: "stats.removable",

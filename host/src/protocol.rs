@@ -120,6 +120,10 @@ pub struct DisplaySettings {
     pub temp_hot: u8,
     /// Upside down, for the USB cable on the other side.
     pub flip: bool,
+    /// Tabs turned off: not shown, and their stats aren't read or sent. None
+    /// from firmware before 0.11.0, which shows every tab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Vec<String>>,
 }
 
 impl Default for DisplaySettings {
@@ -133,6 +137,7 @@ impl Default for DisplaySettings {
             temp_warm: 70,
             temp_hot: 85,
             flip: false,
+            hidden: None,
         }
     }
 }
@@ -150,9 +155,18 @@ impl DisplaySettings {
         order
     }
 
+    /// Whether the deck shows `tab`, as far as its settings go (Battery also
+    /// needs a battery).
+    pub fn shows(&self, tab: &str) -> bool {
+        self.hidden.as_ref().is_none_or(|h| !h.iter().any(|t| t == tab))
+    }
+
     pub fn apply(&mut self, c: &DisplayChange) {
         if let Some(v) = &c.tabs {
             self.tabs = v.clone();
+        }
+        if let Some(v) = &c.hidden {
+            self.hidden = Some(v.clone());
         }
         if let Some(v) = &c.start {
             self.start = v.clone();
@@ -187,6 +201,12 @@ impl DisplaySettings {
             ensure!(TABS.contains(&t.as_str()), "unknown tab {t:?}; the tabs are {}", TABS.join(", "));
             ensure!(seen.insert(t), "tabs lists {t:?} twice");
         }
+        if let Some(hidden) = &self.hidden {
+            for t in hidden {
+                ensure!(TABS.contains(&t.as_str()), "unknown tab {t:?}; the tabs are {}", TABS.join(", "));
+            }
+            ensure!(TABS.iter().any(|t| self.shows(t)), "at least one tab has to stay on");
+        }
         Ok(())
     }
 }
@@ -211,6 +231,9 @@ pub struct DisplayChange {
     pub temp_hot: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip: Option<bool>,
+    /// Added in firmware 0.11.0; older firmware ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Vec<String>>,
 }
 
 impl DisplayChange {
@@ -223,7 +246,7 @@ impl DisplayChange {
         macro_rules! take {
             ($($f:ident),*) => { $(if later.$f.is_some() { self.$f = later.$f; })* };
         }
-        take!(tabs, start, brightness, dim_after, off_after, temp_warm, temp_hot, flip);
+        take!(tabs, start, brightness, dim_after, off_after, temp_warm, temp_hot, flip, hidden);
     }
 }
 
@@ -242,16 +265,24 @@ pub struct ButtonDef {
     pub color: Option<u32>,
 }
 
+/// Each tab's part is left out while the deck has that tab turned off
+/// (firmware 0.11.0); `host` and `uptime` always come, since `stats` is also
+/// how the deck knows the host is there.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Stats {
     pub host: String,
     /// Seconds.
     pub uptime: u64,
-    pub load: [f64; 3],
-    pub cpu: CpuStats,
-    pub mem: MemStats,
-    pub net: NetStats,
-    pub disks: Vec<DiskStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mem: Option<MemStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub net: Option<NetStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disks: Option<Vec<DiskStats>>,
     /// The discrete GPU, when there's one to read. Added in v6.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu: Option<GpuStats>,
@@ -405,6 +436,13 @@ mod tests {
         assert_eq!((d.brightness, d.flip, d.temp_hot), (40, true, 85));
         assert_eq!(d.tab_order(), ["controls", "system", "network", "storage", "battery"]);
 
+        assert_eq!(d.hidden, None);
+        assert!(d.shows("network"));
+
+        let msg: DeviceMsg = serde_json::from_str(r#"{"type":"display","hidden":["network"]}"#).unwrap();
+        let DeviceMsg::Display(d) = msg else { panic!("not a display") };
+        assert!(!d.shows("network") && d.shows("system"));
+
         // Firmware before 0.10.0 doesn't report its settings.
         let msg: DeviceMsg = serde_json::from_str(r#"{"type":"hello","fw":"0.9.0","proto":6}"#).unwrap();
         assert!(matches!(msg, DeviceMsg::Hello { display: None, .. }));
@@ -417,6 +455,15 @@ mod tests {
         let change = DisplayChange { flip: Some(true), ..Default::default() };
         let msg = HostMsg::Display { change, stats_ms: None };
         assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"type":"display","flip":true}"#);
+        let change = DisplayChange { hidden: Some(vec!["battery".into()]), ..Default::default() };
+        let msg = HostMsg::Display { change, stats_ms: None };
+        assert_eq!(serde_json::to_string(&msg).unwrap(), r#"{"type":"display","hidden":["battery"]}"#);
+    }
+
+    #[test]
+    fn stats_leave_out_turned_off_tabs() {
+        let json = serde_json::to_string(&Stats { host: "pc".into(), ..Default::default() }).unwrap();
+        assert_eq!(json, r#"{"host":"pc","uptime":0}"#);
     }
 
     #[test]
@@ -437,6 +484,9 @@ mod tests {
         assert!(bad(DisplayChange { start: Some("nope".into()), ..Default::default() }));
         assert!(bad(DisplayChange { temp_warm: Some(90), ..Default::default() }));
         assert!(bad(DisplayChange { tabs: Some(vec!["system".into(), "system".into()]), ..Default::default() }));
+        assert!(bad(DisplayChange { hidden: Some(vec!["nope".into()]), ..Default::default() }));
+        let all = TABS.iter().map(|t| (*t).to_owned()).collect();
+        assert!(bad(DisplayChange { hidden: Some(all), ..Default::default() }));
         assert!(serde_json::from_str::<DisplayChange>(r#"{"stats_ms":5}"#).is_err());
     }
 }

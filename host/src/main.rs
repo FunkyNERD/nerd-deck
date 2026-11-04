@@ -28,7 +28,7 @@ use base64::Engine;
 use clap::Parser;
 
 use api::Command;
-use collector::Collector;
+use collector::{Collector, Shown};
 use config::Config;
 use device::Connection;
 use protocol::{ButtonDef, DeviceMsg, DisplayChange, DisplaySettings, HostMsg, PROTO_VERSION};
@@ -375,6 +375,9 @@ impl Host {
         let mut deck_board = String::new();
         // The deck's own settings, once it reports them (firmware 0.10.0).
         let mut deck_display: Option<DisplaySettings> = None;
+        // The deck has this session's buttons. They're only sent while it
+        // shows its Controls tab.
+        let mut buttons_sent = false;
 
         loop {
             let available = self.publish_update();
@@ -410,7 +413,10 @@ impl Host {
                             }
                             if said_hello {
                                 send_stats_ms(&self.cfg, &mut conn)?;
-                                send_buttons(&self.cfg, &mut conn, tile)?;
+                                buttons_sent = shows(deck_display.as_ref(), "controls");
+                                if buttons_sent {
+                                    send_buttons(&self.cfg, &mut conn, tile)?;
+                                }
                             }
                         }
                         Err(e) => {
@@ -502,6 +508,8 @@ impl Host {
                     }
                     if let DeviceMsg::Hello { fw, board, proto, tile: t, display } = &msg {
                         said_hello = true;
+                        // It may have rebooted, and lost them.
+                        buttons_sent = false;
                         tile = *t;
                         deck_display = display.clone();
                         deck_fw = fw.clone();
@@ -529,7 +537,13 @@ impl Host {
                             return Ok(SessionEnd::Flash(port, fw));
                         }
                     }
-                    handle(&self.cfg, &mut conn, msg)?
+                    handle(&self.cfg, &mut conn, msg)?;
+                    // Only what the deck shows is read and sent.
+                    self.collector.show(deck_display.as_ref().map(Shown::of).unwrap_or_default());
+                    if said_hello && !buttons_sent && shows(deck_display.as_ref(), "controls") {
+                        send_buttons(&self.cfg, &mut conn, tile)?;
+                        buttons_sent = true;
+                    }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => bail!("device disconnected"),
@@ -600,10 +614,9 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
             if proto != PROTO_VERSION {
                 log::warn!("protocol mismatch: host v{PROTO_VERSION}, device v{proto}");
             }
-            // Device may have rebooted; resend the layout. Its settings are
-            // its own, so only how often stats come.
+            // Device may have rebooted. Its settings are its own, so only how
+            // often stats come; the buttons follow if it shows them.
             send_stats_ms(cfg, conn)?;
-            send_buttons(cfg, conn, tile)?;
         }
         DeviceMsg::Press { id } => {
             let (ok, msg) = match cfg.button(&id) {
@@ -627,6 +640,11 @@ fn handle(cfg: &Config, conn: &mut Connection, msg: DeviceMsg) -> Result<()> {
         DeviceMsg::Unknown => log::debug!("ignoring unknown device message"),
     }
     Ok(())
+}
+
+/// Whether the deck shows `tab`; every tab, until it reports its settings.
+fn shows(deck: Option<&DisplaySettings>, tab: &str) -> bool {
+    deck.is_none_or(|d| d.shows(tab))
 }
 
 fn send_stats_ms(cfg: &Config, conn: &mut Connection) -> Result<()> {
@@ -661,7 +679,8 @@ fn send_buttons(cfg: &Config, conn: &mut Connection, tile: Option<[u32; 2]>) -> 
             image: b.image_data.is_some(),
             color: b.color.as_deref().and_then(config::parse_color),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    log::debug!("sending {} buttons", buttons.len());
     conn.send(&HostMsg::Buttons { buttons })?;
 
     for b in &cfg.buttons {

@@ -10,12 +10,29 @@ namespace {
 constexpr const char* kNamespace = "nerd-deck";
 constexpr const char* kKey = "display";
 // Bump when Display's layout changes; a stored copy of another layout is ignored.
-constexpr uint8_t kLayout = 4;
+constexpr uint8_t kLayout = 5;
 
 struct Stored {
     uint8_t layout;
     Display d;
 };
+
+// Layout 4, from before tabs could be turned off: taken over as it is, with
+// every tab on.
+struct DisplayV4 {
+    uint8_t tabs[kTabCount];
+    int8_t start;
+    uint8_t brightness;
+    uint32_t dimAfterS;
+    uint32_t offAfterS;
+    uint8_t tempWarm, tempHot;
+    bool flip;
+};
+struct StoredV4 {
+    uint8_t layout;
+    DisplayV4 d;
+};
+constexpr size_t kStoredMax = sizeof(Stored) > sizeof(StoredV4) ? sizeof(Stored) : sizeof(StoredV4);
 
 Display defaults() {
     Display d{};
@@ -27,6 +44,7 @@ Display defaults() {
     d.tempWarm = 70;
     d.tempHot = 85;
     d.flip = false;
+    d.hidden = 0;
     return d;
 }
 
@@ -38,7 +56,7 @@ bool valid(const Display& d) {
         seen[t] = true;
     }
     return d.start >= kStartFirst && d.start < kTabCount && d.brightness >= 5 && d.brightness <= 100 &&
-           d.tempWarm < d.tempHot;
+           d.tempWarm < d.tempHot && (d.hidden & ~kAllTabs) == 0 && d.hidden != kAllTabs;
 }
 
 }  // namespace
@@ -51,11 +69,30 @@ int8_t tabFromName(const char* id) {
 
 Display load() {
     Preferences prefs;
-    Stored s{};
+    uint8_t buf[kStoredMax] = {};
+    size_t n = 0;
     if (prefs.begin(kNamespace, true)) {
-        const size_t n = prefs.getBytes(kKey, &s, sizeof s);
+        n = prefs.getBytes(kKey, buf, sizeof buf);
         prefs.end();
-        if (n == sizeof s && s.layout == kLayout && valid(s.d)) return s.d;
+    }
+    if (n == sizeof(Stored) && buf[0] == kLayout) {
+        Stored s;
+        memcpy(&s, buf, sizeof s);
+        if (valid(s.d)) return s.d;
+    } else if (n == sizeof(StoredV4) && buf[0] == 4) {
+        StoredV4 old;
+        memcpy(&old, buf, sizeof old);
+        Display d{};
+        memcpy(d.tabs, old.d.tabs, sizeof d.tabs);
+        d.start = old.d.start;
+        d.brightness = old.d.brightness;
+        d.dimAfterS = old.d.dimAfterS;
+        d.offAfterS = old.d.offAfterS;
+        d.tempWarm = old.d.tempWarm;
+        d.tempHot = old.d.tempHot;
+        d.flip = old.d.flip;
+        d.hidden = 0;
+        if (valid(d)) return d;
     }
     return defaults();
 }
