@@ -28,9 +28,6 @@ on:
     paths: *paths
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   packages:
     name: Build .deb and .rpm
@@ -96,7 +93,8 @@ jobs:
         run: PATH="/opt/cargo-tools/bin:$PATH" host/packaging/build-packages.sh
 
       - name: Upload packages
-        uses: actions/upload-artifact@v7
+        # v4 and later need GitHub's own artifact service, which Forgejo doesn't have.
+        uses: actions/upload-artifact@v3
         with:
           name: nerd-deck-packages
           path: host/dist/
