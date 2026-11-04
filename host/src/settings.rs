@@ -674,6 +674,7 @@ impl State {
             decimals: p.decimals.map_or(0, |d| i32::from(d) + 1),
             warn: number(p.warn).into(),
             crit: number(p.crit).into(),
+            status_text: p.status_text,
             refresh: ModelRc::new(VecModel::from(refresh)),
             interval: p.interval.and_then(|s| choices.iter().position(|&c| c == s)).map_or(0, |i| i as i32 + 1),
             col: at[0].into(),
@@ -1210,6 +1211,9 @@ fn write_tabs(doc: &mut DocumentMut, tabs: &[TabConfig]) {
             }
             if p.kind == PanelKind::Status && p.slow_ms != 1000 {
                 put("slow_ms", (p.slow_ms as i64).into());
+            }
+            if p.kind == PanelKind::Status && p.status_text {
+                put("status_text", true.into());
             }
             if fetched {
                 if let Some(s) = p.interval {
@@ -2123,9 +2127,14 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             "interval" => panel.interval = if index <= 0 { None } else { choices.get(index as usize - 1).copied() },
             "w" => panel.span[0] = index.max(1) as u8,
             "h" => panel.span[1] = index.max(1) as u8,
+            "status-text" => panel.status_text = index != 0,
             _ => {}
         });
         if changed {
+            if field == "status-text" {
+                // The last test showed it the other way.
+                st.panel_results.lock().unwrap().remove(&(st.tabs[t].cfg.id.clone(), p));
+            }
             st.refresh_custom(&ui);
             st.save(&ui);
         }

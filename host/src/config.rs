@@ -247,6 +247,9 @@ pub struct PanelConfig {
     /// For `status`: slower than this many milliseconds shows orange.
     #[serde(default = "default_slow_ms")]
     pub slow_ms: u64,
+    /// For `status`: its reason, like "Not Found", in place of the code.
+    #[serde(default)]
+    pub status_text: bool,
     /// Seconds between refreshes; the tab's when unset.
     #[serde(default)]
     pub interval: Option<u64>,

@@ -102,7 +102,8 @@ icon = "power"
 #             JSON Pointer into it ("/data/0/price"); `sub_json` points at a
 #             note shown under it. `headers` go with the request (API keys).
 #   status  = whether `url` answers: its status code and how fast, green, or
-#             orange slower than `slow_ms` (1000), or red.
+#             orange slower than `slow_ms` (1000), or red. `status_text = true`
+#             shows its reason ("Not Found") in place of the code.
 #   command = the first line a command prints (`sh -c`, like a button's).
 #   text    = `text`, as it is.
 # and can set: title, span = [columns, rows], interval (at least 5 s for url

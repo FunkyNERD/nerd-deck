@@ -202,9 +202,10 @@ Every panel has a `kind`, and can have:
 |---|---|
 | `url` | Fetched with GET. |
 | `slow_ms` | `1000`: slower than this, the dot turns orange. |
+| `status_text` | `false`: when `true`, shows the status's reason, like **OK** or **Not Found**, in place of its code. |
 | `headers` | As for `url`. |
 
-It shows the status code and how long the answer took. The dot is green, orange
+It shows the status code (or its reason, with `status_text`) and how long the answer took. The dot is green, orange
 when slow, and red for a 4xx or 5xx code or no answer at all.
 
 ```toml

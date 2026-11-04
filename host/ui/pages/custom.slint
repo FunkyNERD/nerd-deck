@@ -1,7 +1,7 @@
 import { LineEdit, TextEdit, ScrollView, ComboBox } from "std-widgets.slint";
 import { Theme, Glyphs } from "../theme.slint";
 import { Backend, CustomTab, PanelCell } from "../backend.slint";
-import { Card, Glyph, Segmented, PushButton } from "../widgets.slint";
+import { Card, Glyph, Segmented, PushButton, Toggle } from "../widgets.slint";
 
 // What a panel's state looks like on the deck.
 global PanelLook {
@@ -408,6 +408,25 @@ component PanelInspector inherits VerticalLayout {
                     }
                 }
                 Hint { text: "For an API key, like X-Api-Key. Kept in config.toml as typed; never sent to the deck."; }
+            }
+
+            if root.cell.kind == 1: HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    spacing: 2px;
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    FieldLabel { text: "Show the status as text"; }
+                    Hint { text: "Like \"OK\" or \"Not Found\", in place of 200 or 404."; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Toggle {
+                        label: "Show the status as text";
+                        checked: root.cell.status-text;
+                        toggled(on) => { Backend.set-panel-choice(root.tab, root.sel, "status-text", on ? 1 : 0); }
+                    }
+                }
             }
 
             if root.cell.kind == 0: VerticalLayout {

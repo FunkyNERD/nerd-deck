@@ -298,7 +298,8 @@ fn read(p: &PanelConfig, answer: &Result<Answer, String>) -> Result<PanelValue, 
         } else {
             "ok"
         };
-        return Ok(PanelValue { text: answer.status.to_string(), sub: format!("{} ms", answer.ms), state: Some(state) });
+        let text = if p.status_text { status_reason(answer.status) } else { answer.status.to_string() };
+        return Ok(PanelValue { text, sub: format!("{} ms", answer.ms), state: Some(state) });
     }
     if !(200..300).contains(&answer.status) {
         return Err(format!("HTTP {}", answer.status));
@@ -351,6 +352,14 @@ fn pick(json: &serde_json::Value, pointer: &str) -> Result<String, String> {
         Some(v) => Ok(v.to_string()),
         None => Err(format!("nothing at {pointer}")),
     }
+}
+
+/// A status code's reason, like "Not Found"; the code when it has none.
+fn status_reason(code: u16) -> String {
+    ureq::http::StatusCode::from_u16(code)
+        .ok()
+        .and_then(|s| s.canonical_reason())
+        .map_or_else(|| code.to_string(), str::to_owned)
 }
 
 fn first_line(text: &str) -> String {
@@ -553,6 +562,18 @@ mod tests {
         // Different keys are different requests.
         assert_ne!(Request::of(&with_key("a")), Request::of(&with_key("b")));
         assert_eq!(asked.lock().unwrap().as_slice(), ["abc123"]);
+    }
+
+    #[test]
+    fn status_shows_its_code_or_reason() {
+        let answer = |status| Ok(Answer { status, body: String::new(), ms: 12 });
+        let code = panel("kind='status'\nurl='x'");
+        assert_eq!(read(&code, &answer(404)).unwrap().text, "404");
+        let reason = panel("kind='status'\nurl='x'\nstatus_text=true");
+        assert_eq!(read(&reason, &answer(200)).unwrap().text, "OK");
+        let v = read(&reason, &answer(503)).unwrap();
+        assert_eq!((v.text.as_str(), v.sub.as_str(), v.state), ("Service Unavailable", "12 ms", Some("err")));
+        assert_eq!(read(&reason, &answer(599)).unwrap().text, "599");
     }
 
     #[test]

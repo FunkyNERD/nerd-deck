@@ -102,6 +102,8 @@ export struct PanelCell {
     decimals: int,
     warn: string,
     crit: string,
+    // A status panel shows its reason, like "Not Found", not the code.
+    status-text: bool,
     // Refresh choices, the tab's first, and the one it has.
     refresh: [string],
     interval: int,
@@ -212,7 +214,7 @@ export global Backend {
     // Text fields, by name: title, url, json, sub-json, command, text, prefix,
     // unit, warn, crit.
     callback set-panel-field(int, int, string, string);
-    // Choices, by name: decimals, interval, w, h.
+    // Choices, by name: decimals, interval, w, h, and status-text (0 or 1).
     callback set-panel-choice(int, int, string, int);
     callback test-panel(int, int);
     // A web panel's request headers, by their place in its list.
