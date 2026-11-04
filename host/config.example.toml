@@ -17,7 +17,7 @@ battery = true            # show the battery in the header, on PCs that have one
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device
-firmware = true           # download new device firmware from GitHub and install it when the device's is older
+firmware = true           # download new device firmware from the releases and install it when the device's is older
 
 [notifications]
 enabled = false           # also show desktop notifications (new mail, chat, ...) on the device

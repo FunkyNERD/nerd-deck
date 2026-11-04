@@ -290,9 +290,9 @@ export global Backend {
 
     // Firmware
     in property <[KnownDeck]> known;
-    // The newest firmware on GitHub this app can install; empty until checked.
+    // The newest released firmware this app can install; empty until checked.
     in property <string> fw-latest;
-    // GitHub has answered for fw-board.
+    // The releases have answered for fw-board.
     in property <bool> fw-checked;
     // The board fw-latest is for.
     in property <string> fw-board;

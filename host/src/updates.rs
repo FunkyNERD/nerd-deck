@@ -1,5 +1,6 @@
-//! Checks GitHub for a newer release of the app, once at startup and then
-//! daily, for a notice on the device. The settings window looks up what's new
+//! Checks the project's releases on its Forgejo (Cargo.toml's `repository`)
+//! for a newer release of the app, once at startup and then daily, for a
+//! notice on the device. The settings window looks up what's new
 //! in it and, for a packaged install, downloads the package for the system's
 //! package manager to install. The device firmware has releases of its own
 //! (firmware-v* tags), which the settings window, and the service when it keeps
@@ -61,9 +62,58 @@ struct Release {
 struct Asset {
     name: String,
     browser_download_url: String,
-    /// "sha256:<hex>"; GitHub fills it in for assets uploaded since mid 2025.
+    /// "sha256:<hex>", where the forge gives one (GitHub does). Otherwise
+    /// the release's SHA256SUMS file has it.
     #[serde(default)]
     digest: Option<String>,
+}
+
+impl Release {
+    /// The release's SHA256SUMS file, which both workflows publish.
+    fn sums_url(&self) -> Option<String> {
+        self.assets.iter().find(|a| a.name == SUMS).map(|a| a.browser_download_url.clone())
+    }
+}
+
+/// The checksums file every release carries, in `sha256sum` format.
+const SUMS: &str = "SHA256SUMS";
+
+/// Where a download's checksum comes from.
+#[derive(Debug, Clone)]
+struct Checksum {
+    digest: Option<String>,
+    sums: Option<String>,
+}
+
+impl Checksum {
+    fn of(asset: &Asset, release_sums: Option<String>) -> Self {
+        Self { digest: asset.digest.clone(), sums: release_sums }
+    }
+
+    /// The download's "sha256:<hex>": the forge's, else the release's
+    /// SHA256SUMS line for `name`. None when the release has neither.
+    fn digest(&self, name: &str) -> Result<Option<String>> {
+        if let Some(digest) = &self.digest {
+            return Ok(Some(digest.clone()));
+        }
+        let Some(url) = &self.sums else { return Ok(None) };
+        let text = agent(TIMEOUT)
+            .get(url)
+            .call()
+            .with_context(|| format!("GET {url}"))?
+            .body_mut()
+            .read_to_string()
+            .context("reading the release's checksums")?;
+        sums_digest(&text, name).map(Some).with_context(|| format!("{name} isn't in the release's {SUMS}"))
+    }
+}
+
+/// `name`'s checksum in a `sha256sum` listing, as "sha256:<hex>".
+fn sums_digest(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hex, file) = line.split_once(char::is_whitespace)?;
+        (file.trim_start().trim_start_matches('*') == name).then(|| format!("sha256:{hex}"))
+    })
 }
 
 /// The newest app release, when it's newer than this build.
@@ -79,17 +129,17 @@ pub struct AppUpdate {
 pub struct Package {
     pub name: String,
     url: String,
-    digest: Option<String>,
+    checksum: Checksum,
 }
 
-/// Firmware in a GitHub release that this host can talk to.
+/// Firmware in a release that this host can talk to.
 #[derive(Debug, Clone)]
 pub struct FirmwareRelease {
     pub version: String,
     pub board: String,
     name: String,
     url: String,
-    digest: Option<String>,
+    checksum: Checksum,
 }
 
 /// What the releases offer for the deck.
@@ -111,7 +161,11 @@ pub fn watch() -> Shared {
             let mut seq = 0;
             loop {
                 let wait = match latest() {
-                    Ok(release) => {
+                    Ok(None) => {
+                        log::debug!("no app releases yet");
+                        CHECK_EVERY
+                    }
+                    Ok(Some(release)) => {
                         let version = app_version(&release.tag_name).unwrap_or_default().to_owned();
                         if is_newer(&version, env!("CARGO_PKG_VERSION")) {
                             log::info!("nerd-deck {version} is available: {}", release.html_url);
@@ -137,24 +191,41 @@ pub fn watch() -> Shared {
 }
 
 /// The app's version in a release tag: host-v1.2.3, or v1.2.3 from before the
-/// app and the firmware were released apart. Firmware releases (firmware-v*)
-/// never take "Latest", but they aren't the app's either way.
+/// app and the firmware were released apart. Not a firmware release's.
 fn app_version(tag: &str) -> Option<&str> {
     tag.strip_prefix("host-v").or_else(|| tag.strip_prefix('v'))
 }
 
-/// The release GitHub marks "Latest", which is always the app's.
-fn latest() -> Result<Release> {
-    api("releases/latest").context("parsing the release")
+/// The newest app release. Not the forge's "latest", which can be firmware.
+fn latest() -> Result<Option<Release>> {
+    let releases: Vec<Release> = api("releases?limit=30").context("parsing the releases")?;
+    Ok(newest_app(releases))
 }
 
-/// GET a path under this repository in the GitHub API, as JSON.
+fn newest_app(releases: Vec<Release>) -> Option<Release> {
+    releases
+        .into_iter()
+        .filter(|r| !r.draft && !r.prerelease && app_version(&r.tag_name).is_some())
+        .reduce(|a, b| {
+            let (va, vb) = (app_version(&a.tag_name).unwrap_or(""), app_version(&b.tag_name).unwrap_or(""));
+            if is_newer(vb, va) { b } else { a }
+        })
+}
+
+/// A path under this repository in its Forgejo's API: the repository is
+/// https://<server>/<owner>/<name>.
+fn api_url(repository: &str, path: &str) -> String {
+    let (scheme, rest) = repository.split_once("://").unwrap_or(("https", repository));
+    let (server, repo) = rest.split_once('/').unwrap_or((rest, ""));
+    format!("{scheme}://{server}/api/v1/repos/{}/{path}", repo.trim_end_matches('/'))
+}
+
+/// GET a path under this repository in its Forgejo's API, as JSON.
 fn api<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
-    let repo = env!("CARGO_PKG_REPOSITORY").trim_start_matches("https://github.com/");
-    let url = format!("https://api.github.com/repos/{repo}/{path}");
+    let url = api_url(env!("CARGO_PKG_REPOSITORY"), path);
     agent(TIMEOUT)
         .get(&url)
-        .header("Accept", "application/vnd.github+json")
+        .header("Accept", "application/json")
         .call()
         .with_context(|| format!("GET {url}"))?
         .body_mut()
@@ -173,7 +244,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
 /// Looks through the recent releases for app releases newer than this build.
 /// Prereleases are left out.
 pub fn check_app() -> Result<Option<AppUpdate>> {
-    let releases: Vec<Release> = api("releases?per_page=30").context("parsing the releases")?;
+    let releases: Vec<Release> = api("releases?limit=30").context("parsing the releases")?;
     Ok(newer_app(releases, env!("CARGO_PKG_VERSION"), package_kind()))
 }
 
@@ -187,9 +258,11 @@ fn newer_app(releases: Vec<Release>, current: &str, kind: Option<&str>) -> Optio
     newer.sort_by(|a, b| if is_newer(&a.0, &b.0) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
     let changes = newer.iter().flat_map(|(_, r)| release_changes(r.body.as_deref().unwrap_or(""))).collect();
     let (_, latest) = newer.into_iter().next()?;
+    let sums = latest.sums_url();
     let package = kind.and_then(|ext| {
-        let asset = latest.assets.into_iter().find(|a| a.name.ends_with(ext))?;
-        Some(Package { name: asset.name, url: asset.browser_download_url, digest: asset.digest })
+        let asset = latest.assets.iter().find(|a| a.name.ends_with(ext))?;
+        let checksum = Checksum::of(asset, sums);
+        Some(Package { name: asset.name.clone(), url: asset.browser_download_url.clone(), checksum })
     });
     Some(AppUpdate { changes, package })
 }
@@ -243,10 +316,11 @@ pub fn packaged() -> bool {
 }
 
 /// Downloads the package into the Downloads folder, checked against the
-/// release's digest, and returns its path.
+/// release's checksum, and returns its path.
 pub fn download_package(package: &Package) -> Result<PathBuf> {
     let dir = dirs::download_dir().or_else(dirs::home_dir).context("no Downloads folder")?;
     let path = dir.join(&package.name);
+    let digest = package.checksum.digest(&package.name)?;
     log::info!("downloading {}", package.name);
     let mut data = Vec::new();
     agent(DOWNLOAD_TIMEOUT)
@@ -258,7 +332,7 @@ pub fn download_package(package: &Package) -> Result<PathBuf> {
         .take(MAX_PACKAGE)
         .read_to_end(&mut data)
         .context("downloading the package")?;
-    if let Some(digest) = &package.digest {
+    if let Some(digest) = &digest {
         check_digest(&data, digest)?;
     }
     fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -278,14 +352,18 @@ fn check_digest(data: &[u8], digest: &str) -> Result<()> {
 /// Looks through the recent releases for the newest firmware for a board that
 /// this host can talk to. Prereleases are left out.
 pub fn check_firmware(board: &str) -> Result<FirmwareCheck> {
-    let releases: Vec<Release> = api("releases?per_page=20").context("parsing the releases")?;
+    let releases: Vec<Release> = api("releases?limit=30").context("parsing the releases")?;
     Ok(newest_firmware(releases, board))
 }
 
 fn newest_firmware(releases: Vec<Release>, board: &str) -> FirmwareCheck {
     let mut check = FirmwareCheck::default();
     let releases = releases.into_iter().filter(|r| !r.draft && !r.prerelease);
-    for asset in releases.flat_map(|r| r.assets) {
+    let assets = releases.flat_map(|r| {
+        let sums = r.sums_url();
+        r.assets.into_iter().map(move |a| (a, sums.clone()))
+    });
+    for (asset, sums) in assets {
         let Some(firmware::Name { version, board: b, proto }) = firmware::parse_name(&asset.name) else {
             continue;
         };
@@ -304,9 +382,9 @@ fn newest_firmware(releases: Vec<Release>, board: &str) -> FirmwareCheck {
             check.firmware = Some(FirmwareRelease {
                 version,
                 board: board.to_owned(),
+                checksum: Checksum::of(&asset, sums),
                 name: asset.name,
                 url: asset.browser_download_url,
-                digest: asset.digest,
             });
         }
     }
@@ -320,7 +398,7 @@ fn newest_firmware(releases: Vec<Release>, board: &str) -> FirmwareCheck {
 }
 
 /// Downloads the firmware into the cache, unless it's there already, and
-/// returns its path. The image is checked against the release's digest and
+/// returns its path. The image is checked against the release's checksum and
 /// must be for the board and the version it claims.
 pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
     let dir = firmware::cache_dir().context("no cache directory")?;
@@ -328,6 +406,7 @@ pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
     if Image::load(&path).is_ok_and(|image| image.version == release.version) {
         return Ok(path);
     }
+    let digest = release.checksum.digest(&release.name)?;
     log::info!("downloading firmware {}", release.version);
     let mut data = Vec::new();
     agent(DOWNLOAD_TIMEOUT)
@@ -339,7 +418,7 @@ pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
         .take(MAX_IMAGE)
         .read_to_end(&mut data)
         .context("downloading the firmware")?;
-    if let Some(digest) = &release.digest {
+    if let Some(digest) = &digest {
         check_digest(&data, digest)?;
     }
     let image = Image::parse(data).context("checking the download")?;
@@ -493,5 +572,39 @@ mod tests {
         let check = newest_firmware(vec![release("0.7.0", false, &[&fw("0.7.0", PROTO_VERSION)])], board);
         assert!(check.needs_app.is_none());
         assert!(newest_firmware(vec![], board).firmware.is_none());
+
+        // The release's checksums go with its firmware.
+        let check = newest_firmware(vec![release("0.7.0", false, &[&fw("0.7.0", PROTO_VERSION), SUMS])], board);
+        let sums = check.firmware.unwrap().checksum.sums;
+        assert_eq!(sums.as_deref(), Some("https://example.invalid/SHA256SUMS"));
+    }
+
+    #[test]
+    fn the_newest_app_release_is_not_firmware() {
+        let mut fw = release("0.11.0", false, &[]);
+        fw.tag_name = "firmware-v0.11.0".into();
+        let mut app = release("0.13.0", false, &[]);
+        app.tag_name = "host-v0.13.0".into();
+        let mut old = release("0.12.0", false, &[]);
+        old.tag_name = "host-v0.12.0".into();
+        // Newest first, as the forge lists them.
+        assert_eq!(newest_app(vec![fw, app, old]).unwrap().tag_name, "host-v0.13.0");
+        assert!(newest_app(vec![]).is_none());
+    }
+
+    #[test]
+    fn asks_the_forgejo_api() {
+        assert_eq!(
+            api_url("https://git.hazaar.dev/jamie/nerd-deck", "releases?limit=30"),
+            "https://git.hazaar.dev/api/v1/repos/jamie/nerd-deck/releases?limit=30"
+        );
+    }
+
+    #[test]
+    fn reads_checksums() {
+        let sums = "04b86d84  nerd-deck_0.12.0-1_amd64.deb\n3ae4084d *nerd-deck-0.12.0-1.x86_64.rpm\n";
+        assert_eq!(sums_digest(sums, "nerd-deck_0.12.0-1_amd64.deb").as_deref(), Some("sha256:04b86d84"));
+        assert_eq!(sums_digest(sums, "nerd-deck-0.12.0-1.x86_64.rpm").as_deref(), Some("sha256:3ae4084d"));
+        assert!(sums_digest(sums, "other.deb").is_none());
     }
 }

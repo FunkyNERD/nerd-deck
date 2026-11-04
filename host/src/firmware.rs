@@ -1,4 +1,4 @@
-//! Device firmware images, downloaded from GitHub releases into the cache
+//! Device firmware images, downloaded from the project's releases into the cache
 //! (see updates.rs), and installing them through the ESP32-S3's ROM
 //! bootloader over the same USB serial port. The ROM can't be overwritten, so
 //! an interrupted flash is always recoverable.

@@ -69,7 +69,7 @@ component UpdateBanner inherits Rectangle {
             if Backend.update-package == "" || Backend.update-from-source: PushButton {
                 text: "Releases page";
                 primary: true;
-                clicked => { Backend.open-url("https://github.com/FunkyNERD/nerd-deck/releases/latest"); }
+                clicked => { Backend.open-url("https://git.hazaar.dev/jamie/nerd-deck/releases"); }
             }
             PushButton {
                 icon: Glyphs.cross;

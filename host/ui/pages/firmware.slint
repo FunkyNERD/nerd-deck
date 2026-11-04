@@ -35,7 +35,7 @@ export component FirmwarePage inherits VerticalLayout {
         fw := VerticalLayout {
             padding: 20px;
             spacing: 18px;
-            // The deck runs older firmware than the newest on GitHub.
+            // The deck runs older firmware than the newest released.
             property <bool> newer: Backend.firmware != "" && Backend.fw-latest != "" && Backend.is-newer(Backend.fw-latest, Backend.firmware);
             property <bool> busy: Backend.flashing || Backend.fw-busy != "";
             property <string> error: Backend.fw-error != "" ? Backend.fw-error : Backend.flash-error;
@@ -60,7 +60,7 @@ export component FirmwarePage inherits VerticalLayout {
             HorizontalLayout {
                 spacing: 12px;
                 Version { label: "On the deck"; value: Backend.firmware; }
-                Version { label: "Latest on GitHub"; value: Backend.fw-busy == "checking" ? "…" : Backend.fw-latest; }
+                Version { label: "Latest released"; value: Backend.fw-busy == "checking" ? "…" : Backend.fw-latest; }
                 Version { label: "Board"; value: Backend.board; mono: true; }
             }
             if fw.busy: VerticalLayout {
@@ -69,8 +69,8 @@ export component FirmwarePage inherits VerticalLayout {
                     Text {
                         text: Backend.flashing ? (Backend.fw-installing == "" ? "Writing firmware to the deck…" : "Writing firmware " + Backend.fw-installing + " to the deck…")
                             : Backend.fw-busy == "installing" ? "Installing firmware " + Backend.fw-installing + "…"
-                            : Backend.fw-busy == "downloading" ? "Downloading firmware " + Backend.fw-latest + " from GitHub…"
-                            : "Checking GitHub for firmware…";
+                            : Backend.fw-busy == "downloading" ? "Downloading firmware " + Backend.fw-latest + "…"
+                            : "Checking for new firmware…";
                         font-size: 13px;
                         color: Theme.text;
                         horizontal-stretch: 1;
@@ -104,7 +104,7 @@ export component FirmwarePage inherits VerticalLayout {
                 wrap: word-wrap;
             }
             if !fw.busy && Backend.fw-checked && Backend.fw-latest == "" && fw.error == "": Text {
-                text: "GitHub has no firmware for this version of nerd-deck yet.";
+                text: "There's no firmware for this version of nerd-deck yet.";
                 font-size: 12px;
                 color: Theme.text-dim;
                 wrap: word-wrap;
@@ -140,7 +140,7 @@ export component FirmwarePage inherits VerticalLayout {
         VerticalLayout {
             SettingRow {
                 title: "Keep the deck's firmware up to date";
-                subtitle: "Downloads new firmware from GitHub and installs it when the deck's is older. Never downgrades, and only on the board it's built for.";
+                subtitle: "Downloads new firmware from the releases and installs it when the deck's is older. Never downgrades, and only on the board it's built for.";
                 Toggle {
                     label: "Keep the deck's firmware up to date";
                     checked: Backend.auto-firmware;
@@ -149,7 +149,7 @@ export component FirmwarePage inherits VerticalLayout {
             }
             SettingRow {
                 title: "Check for new nerd-deck releases";
-                subtitle: "Daily, from GitHub. The deck shows a notice when there is one.";
+                subtitle: "Daily, from the releases. The deck shows a notice when there is one.";
                 last: true;
                 Toggle {
                     label: "Check for new nerd-deck releases";

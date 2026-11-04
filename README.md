@@ -21,7 +21,7 @@ A USB desk display for a Linux PC: live CPU, memory, network and disk stats on a
 The message format is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ```bash
-git clone git@github.com:FunkyNERD/nerd-deck.git
+git clone git@git.hazaar.dev:jamie/nerd-deck.git
 ```
 
 ## Hardware
@@ -60,7 +60,7 @@ holds the serial port. If upload doesn't start, hold **BOOT** while pressing
 **RST** to enter the bootloader.
 
 You don't normally need to flash by hand: the host app downloads the firmware
-from the GitHub release and installs it on the device (see
+from its release on git.hazaar.dev and installs it on the device (see
 [Firmware updates](#firmware-updates)). Each build also writes
 `.pio/build/<board>/firmware-merged.bin` (bootloader, partitions and app in one
 image, via `merge_firmware.py`), which is what each release publishes.
@@ -211,7 +211,7 @@ icon) opens a window for everything in the config:
 - **Notifications:** on or off, which apps (each app that has sent one is
   listed), message text, Do Not Disturb, low-urgency ones, and test
   notifications for the deck.
-- **Firmware & updates:** the deck's firmware against the newest on GitHub,
+- **Firmware & updates:** the deck's firmware against the newest released,
   downloading and installing it, automatic updates, the release check, and
   known decks.
 - **About:** versions, links, licences and a block to paste into bug reports.
@@ -280,9 +280,9 @@ Logs: `journalctl --user -u nerd-deck -f`
 The device firmware has releases of its own, apart from the app's (see
 [Releases](#releases)), with one file per board,
 `nerd-deck-firmware-<version>-<board>-proto<N>.bin`; the app's packages don't
-carry it. The settings window's Firmware page checks GitHub for the newest
+carry it. The settings window's Firmware page checks the releases for the newest
 firmware for the connected deck's board that speaks this host's protocol, and
-**Install** downloads it, checks it against the release's SHA-256 digest and the
+**Install** downloads it, checks it against the release's `SHA256SUMS` and the
 board and version inside the image, and has the service install it. Firmware
 that needs a newer protocol is only mentioned, with a note to update the app
 first. Downloads are kept in `~/.cache/nerd-deck/firmware/`.
@@ -363,11 +363,11 @@ git tag firmware-v0.7.0 && git push origin main firmware-v0.7.0
 ```
 
 A tag with a suffix (`host-v0.7.0-beta.1`) is published as a prerelease, which
-the app's update checks ignore. The app's releases are always GitHub's "Latest";
-the firmware's never are. Each release's notes list the commits since that
-side's previous release that touch its folder or the docs, grouped by type
-(`.github/scripts/release-notes.sh`). Releases up to 0.6.0 were tagged `v*` and
-carried both.
+the app's update checks ignore. The update check picks the newest `host-v*`
+release, whichever release the forge calls "latest". Each release's notes list
+the commits since that side's previous release that touch its folder or the
+docs, grouped by type (`.github/scripts/release-notes.sh`). Releases up to 0.6.0
+were tagged `v*` and carried both.
 
 The protocol version (`kProtoVersion` in the firmware, `PROTO_VERSION` in the
 app) is what ties them together. The app installs the newest firmware that

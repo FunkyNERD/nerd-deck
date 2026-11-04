@@ -102,9 +102,9 @@ impl Default for StatsConfig {
 #[derive(Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpdatesConfig {
-    /// Check GitHub daily for a newer release and show a notice on the device.
+    /// Check the releases daily for a newer one and show a notice on the device.
     pub check: bool,
-    /// Download new device firmware from GitHub releases and install it when
+    /// Download new device firmware from the releases and install it when
     /// the device's is older (only on the board it's built for).
     pub firmware: bool,
 }

@@ -2,7 +2,7 @@
 //! place, keeping its comments and layout, and asks the running service to
 //! reload it after each change, so the deck follows along. Status and actions
 //! (test notifications, installing firmware) go through the service's D-Bus
-//! interface (api.rs). Firmware is downloaded from GitHub here (updates.rs)
+//! interface (api.rs). Firmware is downloaded from the releases here (updates.rs)
 //! before the service installs it. The UI itself is in ui/settings.slint.
 
 slint::include_modules!();
@@ -1484,7 +1484,7 @@ fn control_service(ui: &SettingsWindow, busy: &'static str, f: fn() -> Result<()
     });
 }
 
-/// Ask GitHub what's new in the app's newer releases, and for this system's package.
+/// Ask the releases what's new in the app's newer ones, and for this system's package.
 fn check_app(ui: &SettingsWindow) {
     let b = ui.global::<Backend>();
     b.set_update_from_source(!updates::packaged());
@@ -1509,7 +1509,7 @@ fn check_app(ui: &SettingsWindow) {
     });
 }
 
-/// Ask GitHub for the newest firmware this host can install on the deck's board.
+/// Ask the releases for the newest firmware this host can install on the deck's board.
 fn check_firmware(ui: &SettingsWindow) {
     let b = ui.global::<Backend>();
     let board = b.get_board().to_string();
@@ -1539,7 +1539,7 @@ fn check_firmware(ui: &SettingsWindow) {
                     b.set_fw_latest(check.firmware.map(|f| f.version).unwrap_or_default().into());
                     b.set_fw_needs_app(check.needs_app.unwrap_or_default().into());
                 }
-                Err(e) => b.set_fw_error(format!("Couldn't check GitHub: {e:#}").into()),
+                Err(e) => b.set_fw_error(format!("Couldn't check the releases: {e:#}").into()),
             }
         });
     });
@@ -1578,7 +1578,7 @@ fn show_status(ui: &SettingsWindow, status: Option<&Status>) {
         b.set_fw_installing("".into());
     }
     b.set_flash_error(flash_error.into());
-    // Check GitHub for this deck's firmware when one connects, or a deck on
+    // Check the releases for this deck's firmware when one connects, or a deck on
     // another board replaces it.
     if !s.board.is_empty() && b.get_fw_board() != s.board.as_str() && b.get_check_updates() {
         check_firmware(ui);

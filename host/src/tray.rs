@@ -28,7 +28,7 @@ const TRAY_NAME: &str = "io.github.FunkyNERD.NerdDeck.Tray";
 /// Status is also polled, in case a signal is missed while the service restarts.
 const POLL: Duration = Duration::from_secs(5);
 
-const RELEASES: &str = "https://github.com/FunkyNERD/nerd-deck/releases/latest";
+const RELEASES: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases");
 
 pub fn run() -> Result<()> {
     let bus = Connection::session().context("connecting to the session bus")?;
