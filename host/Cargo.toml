@@ -1,11 +1,11 @@
 [package]
 name = "nerd-deck"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 description = "Streams system stats to a nerd-deck display over USB and runs its button commands"
 license = "MIT"
-repository = "https://github.com/FunkyNERD/nerd-deck"
-homepage = "https://github.com/FunkyNERD/nerd-deck"
+repository = "https://git.hazaar.dev/jamie/nerd-deck"
+homepage = "https://git.hazaar.dev/jamie/nerd-deck"
 
 [dependencies]
 anyhow = "1"
@@ -25,7 +25,7 @@ serialport = "4"
 # sample than they save on a refresh this small.
 sysinfo = { version = "0.32", default-features = false, features = ["component", "disk", "network", "system"] }
 toml = "0.8"
-# The daily update check against the GitHub releases API.
+# The daily update check against the project's releases on git.hazaar.dev.
 ureq = { version = "3.5.0", features = ["json"] }
 # Checks downloaded firmware against the release's digest.
 sha2 = "0.11"
