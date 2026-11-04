@@ -669,6 +669,7 @@ impl State {
             sub_json: p.sub_json.clone().unwrap_or_default().into(),
             command: p.command.clone().unwrap_or_default().into(),
             text: p.text.clone().unwrap_or_default().into(),
+            prefix: p.prefix.clone().into(),
             unit: p.unit.clone().into(),
             decimals: p.decimals.map_or(0, |d| i32::from(d) + 1),
             warn: number(p.warn).into(),
@@ -1181,6 +1182,9 @@ fn write_tabs(doc: &mut DocumentMut, tabs: &[TabConfig]) {
                 }
             }
             if number {
+                if !p.prefix.is_empty() {
+                    put("prefix", p.prefix.as_str().into());
+                }
                 if !p.unit.is_empty() {
                     put("unit", p.unit.as_str().into());
                 }
@@ -2083,6 +2087,7 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
                     "sub-json" => panel.sub_json = pointer(&text),
                     "command" => panel.command = optional(&text),
                     "text" => panel.text = optional(&text),
+                    "prefix" => panel.prefix = text.clone(),
                     "unit" => panel.unit = text.clone(),
                     _ => {}
                 }),
@@ -2539,7 +2544,7 @@ mod tests {
     fn writes_custom_tabs() {
         let tabs_toml = "[[tab]]\nid='infra'\nname='Infra'\ngrid=[2,1]\n\
             [[tab.panel]]\nkind='status'\ntitle='Git'\nurl='https://git.example.com'\nheaders={Authorization='x'}\n\
-            [[tab.panel]]\nkind='url'\nurl='https://x/y'\njson='/a/b'\nunit='%'\ndecimals=1\nwarn=80.0\ncrit=95.0\ninterval=30\n\
+            [[tab.panel]]\nkind='url'\nurl='https://x/y'\njson='/a/b'\nprefix='~'\nunit='%'\ndecimals=1\nwarn=80.0\ncrit=95.0\ninterval=30\n\
             [[tab]]\nid='notes'\nname='Notes'\nicon='bell'\ngrid=[1,1]\ninterval=60\n\
             [[tab.panel]]\nkind='text'\ntext='Hi'\n";
         let tabs: Config = toml::from_str(tabs_toml).unwrap();

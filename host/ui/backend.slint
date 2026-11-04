@@ -89,6 +89,8 @@ export struct PanelCell {
     sub-json: string,
     command: string,
     text: string,
+    // Before the value, and after it.
+    prefix: string,
     unit: string,
     // 0 as it comes, else digits + 1.
     decimals: int,
@@ -201,8 +203,8 @@ export global Backend {
     callback remove-panel(int, int);
     callback move-panel(int, int, int);
     callback set-panel-kind(int, int, int);
-    // Text fields, by name: title, url, json, sub-json, command, text, unit,
-    // warn, crit.
+    // Text fields, by name: title, url, json, sub-json, command, text, prefix,
+    // unit, warn, crit.
     callback set-panel-field(int, int, string, string);
     // Choices, by name: decimals, interval, w, h.
     callback set-panel-choice(int, int, string, int);

@@ -226,7 +226,10 @@ pub struct PanelConfig {
     /// For `text`.
     #[serde(default)]
     pub text: Option<String>,
-    /// After the value, like "%" or " C".
+    /// Before the value, like "$".
+    #[serde(default)]
+    pub prefix: String,
+    /// After the value, like "%" or " mm".
     #[serde(default)]
     pub unit: String,
     /// Digits after the point for a number.

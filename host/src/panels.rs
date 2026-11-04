@@ -2,8 +2,13 @@
 //! interval, only while the deck shows its tab, by a thread of its own: a slow
 //! URL or command never holds up stats or button presses. The main loop gets
 //! a panel's content only when it changes.
+//!
+//! Panels that ask the same URL, with the same headers, share one request:
+//! those due together wait on one answer, and one due while the last answer
+//! is younger than its interval takes that, so a page several panels read
+//! from is fetched once per refresh.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -37,6 +42,41 @@ enum Event {
     /// The custom tabs the deck shows, by id; the rest aren't refreshed.
     Shown(HashSet<String>),
     Done { generation: u64, tab: usize, panel: usize, result: Result<PanelValue, String> },
+    /// A web request the panels waiting on it share.
+    Answered { generation: u64, request: Request, answer: Result<Answer, String> },
+}
+
+/// What a web panel asks: panels asking the same share one request.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Request {
+    url: String,
+    headers: Vec<(String, String)>,
+}
+
+impl Request {
+    /// None for panels that don't ask a web server.
+    fn of(p: &PanelConfig) -> Option<Self> {
+        matches!(p.kind, PanelKind::Url | PanelKind::Status).then(|| Self {
+            url: p.url.clone().unwrap_or_default(),
+            headers: p.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        })
+    }
+}
+
+/// A web server's answer: its status, its body, and how long it took.
+#[derive(Debug, Clone)]
+struct Answer {
+    status: u16,
+    body: String,
+    ms: u128,
+}
+
+/// A request's last answer and when it came, and the panels waiting on the
+/// one in flight.
+#[derive(Default)]
+struct Shared {
+    answer: Option<(Instant, Result<Answer, String>)>,
+    waiting: Vec<(usize, usize)>,
 }
 
 pub struct Panels {
@@ -84,11 +124,13 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
     let mut tabs: Vec<TabConfig> = Vec::new();
     let mut slots: Vec<Vec<Slot>> = Vec::new();
     let mut shown = HashSet::new();
+    let mut requests: HashMap<Request, Shared> = HashMap::new();
     // Results from before a reload are dropped.
     let mut generation = 0;
     loop {
         let now = Instant::now();
         let mut wake = now + IDLE;
+        let mut due = Vec::new();
         for (ti, tab) in tabs.iter().enumerate().filter(|(_, t)| shown.contains(&t.id)) {
             for (pi, panel) in tab.panels.iter().enumerate() {
                 let slot = &mut slots[ti][pi];
@@ -99,15 +141,53 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
                     wake = wake.min(slot.next);
                     continue;
                 }
-                slot.busy = true;
                 slot.next = now + Duration::from_secs(panel.interval(tab));
+                wake = wake.min(slot.next);
+                due.push((ti, pi));
+            }
+        }
+
+        for (ti, pi) in due {
+            let panel = &tabs[ti].panels[pi];
+            let Some(request) = Request::of(panel) else {
+                // Its own thread: a command, or text.
+                slots[ti][pi].busy = true;
                 let (panel, done) = (panel.clone(), done.clone());
                 let spawned = thread::Builder::new().name("panel".into()).spawn(move || {
                     let result = fetch(&panel);
                     let _ = done.send(Event::Done { generation, tab: ti, panel: pi, result });
                 });
                 if spawned.is_err() {
-                    slot.busy = false;
+                    slots[ti][pi].busy = false;
+                }
+                continue;
+            };
+            let interval = Duration::from_secs(panel.interval(&tabs[ti]));
+            let shared = requests.entry(request.clone()).or_default();
+            // Answered recently enough for this panel: read that.
+            if let Some((at, answer)) = &shared.answer {
+                if at.elapsed() < interval && shared.waiting.is_empty() {
+                    let result = read(panel, answer);
+                    if !settle(&tabs, &mut slots, &updates, ti, pi, result) {
+                        return;
+                    }
+                    continue;
+                }
+            }
+            slots[ti][pi].busy = true;
+            shared.waiting.push((ti, pi));
+            if shared.waiting.len() > 1 {
+                continue; // asked already: it waits for that answer
+            }
+            let timeout = Duration::from_secs(panel.timeout);
+            let done = done.clone();
+            let spawned = thread::Builder::new().name("panel".into()).spawn(move || {
+                let answer = ask(&request, timeout);
+                let _ = done.send(Event::Answered { generation, request, answer });
+            });
+            if spawned.is_err() {
+                for (t, p) in shared.waiting.drain(..) {
+                    slots[t][p].busy = false;
                 }
             }
         }
@@ -121,33 +201,59 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
                     .map(|tab| tab.panels.iter().map(|_| Slot { next: now, busy: false, last: None }).collect())
                     .collect();
                 tabs = t;
+                requests.clear();
             }
             Ok(Event::Shown(s)) => shown = s,
             Ok(Event::Done { generation: g, tab, panel, result }) if g == generation => {
-                let slot = &mut slots[tab][panel];
-                slot.busy = false;
-                let config = &tabs[tab].panels[panel];
-                let value = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        if slot.last.as_ref().is_none_or(|l| l.state != Some("stale") && l.state != Some("err")) {
-                            log::warn!("tab {:?}: panel {:?}: {e}", tabs[tab].id, config.title);
-                        }
-                        failed(config, slot.last.as_ref(), &e)
-                    }
-                };
-                if slot.last.as_ref() != Some(&value) {
-                    slot.last = Some(value.clone());
-                    let update = Update { tab: tabs[tab].id.clone(), index: panel, value };
-                    if updates.send(update).is_err() {
+                slots[tab][panel].busy = false;
+                if !settle(&tabs, &mut slots, &updates, tab, panel, result) {
+                    return;
+                }
+            }
+            Ok(Event::Answered { generation: g, request, answer }) if g == generation => {
+                let shared = requests.entry(request).or_default();
+                let waiting = std::mem::take(&mut shared.waiting);
+                for &(tab, panel) in &waiting {
+                    slots[tab][panel].busy = false;
+                    let result = read(&tabs[tab].panels[panel], &answer);
+                    if !settle(&tabs, &mut slots, &updates, tab, panel, result) {
                         return;
                     }
                 }
+                shared.answer = Some((Instant::now(), answer));
             }
-            Ok(Event::Done { .. }) | Err(RecvTimeoutError::Timeout) => {}
+            Ok(Event::Done { .. } | Event::Answered { .. }) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
     }
+}
+
+/// Puts a panel's new result in its slot, and sends it to the main loop if
+/// what it shows changed. False once the main loop has gone.
+fn settle(
+    tabs: &[TabConfig],
+    slots: &mut [Vec<Slot>],
+    updates: &Sender<Update>,
+    tab: usize,
+    panel: usize,
+    result: Result<PanelValue, String>,
+) -> bool {
+    let slot = &mut slots[tab][panel];
+    let config = &tabs[tab].panels[panel];
+    let value = match result {
+        Ok(v) => v,
+        Err(e) => {
+            if slot.last.as_ref().is_none_or(|l| l.state != Some("stale") && l.state != Some("err")) {
+                log::warn!("tab {:?}: panel {:?}: {e}", tabs[tab].id, config.title);
+            }
+            failed(config, slot.last.as_ref(), &e)
+        }
+    };
+    if slot.last.as_ref() == Some(&value) {
+        return true;
+    }
+    slot.last = Some(value.clone());
+    updates.send(Update { tab: tabs[tab].id.clone(), index: panel, value }).is_ok()
 }
 
 /// A panel that couldn't be refreshed: a status panel is down; the others keep
@@ -173,37 +279,40 @@ pub fn fetch(p: &PanelConfig) -> Result<PanelValue, String> {
             let out = run_command(p.command.as_deref().unwrap_or(""), timeout)?;
             Ok(value(p, first_line(&out), None))
         }
-        PanelKind::Url => {
-            let (status, body) = get(p, timeout)?;
-            if !(200..300).contains(&status) {
-                return Err(format!("HTTP {status}"));
-            }
-            let Some(pointer) = &p.json else {
-                return Ok(value(p, first_line(&body), None));
-            };
-            let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("not JSON: {e}"))?;
-            let text = pick(&json, pointer)?;
-            let sub = p.sub_json.as_deref().map(|s| pick(&json, s)).transpose()?;
-            Ok(value(p, text, sub))
-        }
-        PanelKind::Status => {
-            let started = Instant::now();
-            let (status, _) = get(p, timeout)?;
-            let ms = started.elapsed().as_millis();
-            let state = if status >= 400 {
-                "err"
-            } else if ms > u128::from(p.slow_ms) {
-                "warn"
-            } else {
-                "ok"
-            };
-            Ok(PanelValue { text: status.to_string(), sub: format!("{ms} ms"), state: Some(state) })
+        PanelKind::Url | PanelKind::Status => {
+            let request = Request::of(p).expect("a web panel");
+            read(p, &ask(&request, timeout))
         }
     }
 }
 
-/// The text to show for `raw`: a number with `decimals`, and `unit` after it,
-/// coloured by `warn` and `crit`.
+/// What a web panel shows for `answer`.
+fn read(p: &PanelConfig, answer: &Result<Answer, String>) -> Result<PanelValue, String> {
+    let answer = answer.as_ref().map_err(Clone::clone)?;
+    if p.kind == PanelKind::Status {
+        let state = if answer.status >= 400 {
+            "err"
+        } else if answer.ms > u128::from(p.slow_ms) {
+            "warn"
+        } else {
+            "ok"
+        };
+        return Ok(PanelValue { text: answer.status.to_string(), sub: format!("{} ms", answer.ms), state: Some(state) });
+    }
+    if !(200..300).contains(&answer.status) {
+        return Err(format!("HTTP {}", answer.status));
+    }
+    let Some(pointer) = &p.json else {
+        return Ok(value(p, first_line(&answer.body), None));
+    };
+    let json: serde_json::Value = serde_json::from_str(&answer.body).map_err(|e| format!("not JSON: {e}"))?;
+    let text = pick(&json, pointer)?;
+    let sub = p.sub_json.as_deref().map(|s| pick(&json, s)).transpose()?;
+    Ok(value(p, text, sub))
+}
+
+/// The text to show for `raw`: a number with `decimals`, `prefix` before it
+/// and `unit` after it, coloured by `warn` and `crit`.
 fn value(p: &PanelConfig, raw: String, sub: Option<String>) -> PanelValue {
     let number: Option<f64> = raw.trim().parse().ok().filter(|n: &f64| n.is_finite());
     let shown = match (number, p.decimals) {
@@ -211,7 +320,7 @@ fn value(p: &PanelConfig, raw: String, sub: Option<String>) -> PanelValue {
         _ => raw,
     };
     PanelValue {
-        text: clean(&format!("{shown}{}", p.unit), MAX_TEXT),
+        text: clean(&format!("{}{shown}{}", p.prefix, p.unit), MAX_TEXT),
         sub: sub.map(|s| clean(&s, MAX_SUB)).unwrap_or_default(),
         state: number.and_then(|n| level(p, n)),
     }
@@ -247,24 +356,25 @@ fn first_line(text: &str) -> String {
     text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").to_owned()
 }
 
-/// GETs the panel's URL: its status and body. A 4xx or 5xx is an answer, not
-/// an error.
-fn get(p: &PanelConfig, timeout: Duration) -> Result<(u16, String), String> {
-    let url = p.url.as_deref().unwrap_or("");
+/// GETs a URL: its status and body, and how long it took. A 4xx or 5xx is an
+/// answer, not an error.
+fn ask(request: &Request, timeout: Duration) -> Result<Answer, String> {
+    log::debug!("asking {}", request.url);
+    let started = Instant::now();
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
         .user_agent(concat!("nerd-deck/", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
-    let mut request = agent.get(url);
-    for (name, value) in &p.headers {
-        request = request.header(name, value);
+    let mut get = agent.get(&request.url);
+    for (name, value) in &request.headers {
+        get = get.header(name, value);
     }
-    let mut response = request.call().map_err(|e| e.to_string())?;
+    let mut response = get.call().map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     let body = response.body_mut().with_config().limit(MAX_BODY).read_to_string().unwrap_or_default();
-    Ok((status, body))
+    Ok(Answer { status, body, ms: started.elapsed().as_millis() })
 }
 
 /// Runs `command` with `sh -c` and returns what it prints, or why it failed.
@@ -327,6 +437,10 @@ mod tests {
         assert_eq!((v.text.as_str(), v.sub.as_str(), v.state), ("81.2%", "up", Some("warn")));
         assert_eq!(value(&p, "99".into(), None).state, Some("err"));
         assert_eq!(value(&p, "hello".into(), None), PanelValue { text: "hello%".into(), ..Default::default() });
+        let money = panel("kind='url'\nurl='x'\nprefix='$'\ndecimals=2");
+        assert_eq!(value(&money, "1.4271".into(), None).text, "$1.43");
+        let both = panel("kind='url'\nurl='x'\nprefix='$'\nunit=' AUD'");
+        assert_eq!(value(&both, "1.43".into(), None).text, "$1.43 AUD");
 
         // Lower is worse when crit is below warn, say for disk space left.
         let low = panel("kind='url'\nurl='x'\nwarn=20.0\ncrit=10.0");
@@ -350,6 +464,57 @@ mod tests {
         let started = Instant::now();
         assert_eq!(run_command("sleep 5 | cat", Duration::from_millis(200)).unwrap_err(), "timed out");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn panels_share_a_request() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // A server that counts what it's asked.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.read(&mut [0u8; 4096]);
+                let body = r#"{"date":"2026-11-04","rates":{"AUD":1.4271,"EUR":0.92}}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+
+        // Three panels on one URL, one on another.
+        let url = format!("http://127.0.0.1:{port}/latest");
+        let tab: TabConfig = toml::from_str(&format!(
+            "id='money'\nname='Money'\ngrid=[2,2]\ninterval=3600\n\
+             [[panel]]\nkind='url'\nurl='{url}'\njson='/rates/AUD'\nprefix='$'\n\
+             [[panel]]\nkind='url'\nurl='{url}'\njson='/rates/EUR'\n\
+             [[panel]]\nkind='status'\nurl='{url}'\n\
+             [[panel]]\nkind='url'\nurl='http://127.0.0.1:{port}/other'\njson='/date'"
+        ))
+        .unwrap();
+        let panels = Panels::start(vec![tab]);
+        panels.show(HashSet::from(["money".to_owned()]));
+        let mut got = HashMap::new();
+        let until = Instant::now() + Duration::from_secs(5);
+        while got.len() < 4 && Instant::now() < until {
+            got.extend(panels.updates().map(|u| (u.index, u.value.text)));
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(got[&0], "$1.4271");
+        assert_eq!(got[&1], "0.92");
+        assert_eq!(got[&2], "200");
+        assert_eq!(got[&3], "2026-11-04");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "one request per URL");
     }
 
     #[test]

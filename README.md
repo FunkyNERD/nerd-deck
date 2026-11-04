@@ -159,7 +159,8 @@ Each panel is refreshed at its own interval (at least 5 seconds for web
 requests), whatever the stats interval, and only while its tab is on. Numbers
 can turn orange and red past limits you set. A panel that can't be refreshed
 keeps what it showed, greyed, with the reason under it. Needs firmware 0.11.0
-or later.
+or later. [docs/CUSTOM-TABS.md](docs/CUSTOM-TABS.md) has every option and
+examples, among them an exchange rate from api.hazaar.dev.
 
 ### Desktop notifications
 

@@ -106,9 +106,10 @@ icon = "power"
 #   command = the first line a command prints (`sh -c`, like a button's).
 #   text    = `text`, as it is.
 # and can set: title, span = [columns, rows], interval (at least 5 s for url
-# and status, 1 s for command), timeout (seconds, 10), and for numbers: unit
-# ("%"), decimals, and warn / crit, from which it shows orange / red (below
-# them when crit is the lower).
+# and status, 1 s for command), timeout (seconds, 10), and for numbers:
+# prefix ("$", before it), unit (" mm", after it), decimals, and warn / crit,
+# from which it shows orange / red (below them when crit is the lower).
+# docs/CUSTOM-TABS.md has them all, with examples.
 #
 #   [[tab.panel]]
 #   kind = "status"
@@ -130,6 +131,7 @@ icon = "power"
 #   title = "Bitcoin"
 #   url = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 #   json = "/data/amount"
+#   prefix = "$"
 #   unit = " USD"
 #   decimals = 0
 #   span = [2, 1]

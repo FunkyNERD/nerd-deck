@@ -416,28 +416,41 @@ component PanelInspector inherits VerticalLayout {
                     VerticalLayout {
                         spacing: 4px;
                         horizontal-stretch: 1;
-                        Hint { text: "Unit"; }
+                        Hint { text: "Before"; }
                         LineEdit {
                             property <int> source: root.source;
-                            changed source => { self.text = root.cell.unit; }
+                            changed source => { self.text = root.cell.prefix; }
                             min-width: 0;
-                            text: root.cell.unit;
-                            placeholder-text: "e.g. %";
-                            accessible-label: "Unit";
-                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "unit", text); }
+                            text: root.cell.prefix;
+                            placeholder-text: "e.g. $";
+                            accessible-label: "Before the value";
+                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "prefix", text); }
                         }
                     }
                     VerticalLayout {
                         spacing: 4px;
                         horizontal-stretch: 1;
-                        Hint { text: "Decimals"; }
-                        ComboBox {
+                        Hint { text: "After"; }
+                        LineEdit {
+                            property <int> source: root.source;
+                            changed source => { self.text = root.cell.unit; }
                             min-width: 0;
-                            model: Backend.decimal-options;
-                            current-index: root.cell.decimals;
-                            accessible-label: "Decimals";
-                            selected => { Backend.set-panel-choice(root.tab, root.sel, "decimals", self.current-index); }
+                            text: root.cell.unit;
+                            placeholder-text: "e.g. mm";
+                            accessible-label: "After the value";
+                            edited(text) => { Backend.set-panel-field(root.tab, root.sel, "unit", text); }
                         }
+                    }
+                }
+                Hint { text: "Exactly as typed: put any space in it, like \" mm\"."; }
+                VerticalLayout {
+                    spacing: 4px;
+                    Hint { text: "Decimals"; }
+                    ComboBox {
+                        model: Backend.decimal-options;
+                        current-index: root.cell.decimals;
+                        accessible-label: "Decimals";
+                        selected => { Backend.set-panel-choice(root.tab, root.sel, "decimals", self.current-index); }
                     }
                 }
                 HorizontalLayout {
