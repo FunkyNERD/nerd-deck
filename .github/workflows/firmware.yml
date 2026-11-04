@@ -32,7 +32,7 @@ permissions:
 jobs:
   firmware:
     name: Build firmware
-    runs-on: ubuntu-latest
+    runs-on: docker
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

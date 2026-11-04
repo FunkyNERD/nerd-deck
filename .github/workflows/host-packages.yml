@@ -34,7 +34,7 @@ permissions:
 jobs:
   packages:
     name: Build .deb and .rpm
-    runs-on: ubuntu-latest
+    runs-on: docker
     container:
       image: ubuntu:22.04
     steps:
