@@ -78,6 +78,11 @@ when it's present. The tab shows the rest:
 Every field after `charging` is v5, and each is left out when the battery
 doesn't report it (`state` and `ac` are always there).
 
+`header: false` keeps the reading out of the header while the Battery tab
+still shows; it's left out otherwise. The host leaves `battery` out altogether
+when neither shows it. Added in firmware 0.12.0 without a protocol change;
+older firmware ignores it and shows the reading.
+
 ### `buttons`
 The layout for the Controls tab: up to 12 buttons, shown 4×3. Sent whenever the
 device says `hello` (which it does in reply to the host's), and when the config

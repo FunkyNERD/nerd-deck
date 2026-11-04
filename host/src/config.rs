@@ -83,7 +83,8 @@ pub struct StatsConfig {
     /// Also report removable drives (USB disks, SD cards) while they're mounted,
     /// after `mounts`.
     pub removable: bool,
-    /// Show the battery in the device's header, on PCs that have one.
+    /// Show the battery reading in the device's header, on PCs that have one.
+    /// The Battery tab is turned on and off with the other tabs.
     pub battery: bool,
 }
 

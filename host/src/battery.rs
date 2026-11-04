@@ -150,6 +150,7 @@ fn read_from(root: &Path) -> Option<BatteryStats> {
         limit,
         ac,
         charger_w: charger_w.map(f32::round),
+        header: true,
     })
 }
 

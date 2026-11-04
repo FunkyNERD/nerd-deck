@@ -963,8 +963,8 @@ impl State {
         b.set_disks(ModelRc::new(VecModel::from(self.disk_rows())));
         b.set_battery_note(
             match battery::read() {
-                Some(bat) if bat.charging => format!("{}%, charging. Hidden on PCs without one.", bat.percent),
-                Some(bat) => format!("{}%. Hidden on PCs without one.", bat.percent),
+                Some(bat) if bat.charging => format!("{}%, charging. The Battery tab is under Deck tabs.", bat.percent),
+                Some(bat) => format!("{}%. The Battery tab is under Deck tabs.", bat.percent),
                 None => "No battery found on this PC.".into(),
             }
             .into(),

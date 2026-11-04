@@ -33,11 +33,11 @@ export component StatsPage inherits VerticalLayout {
                 }
             }
             SettingRow {
-                title: "Show the battery";
+                title: "Battery in the header";
                 subtitle: Backend.battery-note;
                 last: true;
                 Toggle {
-                    label: "Show the battery";
+                    label: "Battery in the header";
                     checked: Backend.battery;
                     toggled(on) => { Backend.set-flag("stats.battery", on); }
                 }

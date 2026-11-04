@@ -129,6 +129,7 @@ void handleStats(JsonObjectConst o) {
         b.limit = battery["limit"] | 0u;
         b.ac = battery["ac"] | b.charging;
         b.charger_w = battery["charger_w"] | NAN;
+        b.header = battery["header"] | true;
     }
 
     JsonObjectConst gpu = o["gpu"];

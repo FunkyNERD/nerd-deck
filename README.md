@@ -202,8 +202,8 @@ icon) opens a window for everything in the config:
   action (lock, volume, media keys, a terminal, suspend, ...), opening a URL,
   or running any program. **Run now** tries it on the spot. Add, remove and
   reorder them.
-- **Stats:** update interval, network interface, battery, and which disks the
-  Storage tab shows, in what order.
+- **Stats:** update interval, network interface, the battery in the header,
+  and which disks the Storage tab shows, in what order.
 - **Deck tabs:** the order of the deck's tabs and which are on, with a
   preview of its header.
 - **Custom tabs:** your own tabs: their name, icon, grid and refresh, and

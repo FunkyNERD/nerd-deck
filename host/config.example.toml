@@ -13,7 +13,7 @@ interval_ms = 1000
 # interface = "enp5s0"    # default: busiest non-loopback interface
 mounts = ["/", "/home"]   # the device shows up to 4
 removable = true          # also show USB drives / SD cards while mounted
-battery = true            # show the battery in the header, on PCs that have one
+battery = true            # show the battery reading in the header, on PCs that have one
 
 [updates]
 check = true              # look for a newer release daily and show a notice on the device

@@ -27,23 +27,29 @@ const SLOW_EVERY: Duration = Duration::from_secs(1);
 const CPU_TEMP_LABELS: &[&str] = &["Package id 0", "Tctl", "Tdie", "k10temp", "coretemp", "cpu"];
 
 /// The deck's tabs whose stats are read. A tab that's turned off costs
-/// nothing; Battery isn't here, since the header shows the battery on every tab.
+/// nothing; the battery is still read while the header shows it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shown {
     pub system: bool,
     pub network: bool,
     pub storage: bool,
+    pub battery: bool,
 }
 
 impl Default for Shown {
     fn default() -> Self {
-        Self { system: true, network: true, storage: true }
+        Self { system: true, network: true, storage: true, battery: true }
     }
 }
 
 impl Shown {
     pub fn of(d: &DisplaySettings) -> Self {
-        Self { system: d.shows("system"), network: d.shows("network"), storage: d.shows("storage") }
+        Self {
+            system: d.shows("system"),
+            network: d.shows("network"),
+            storage: d.shows("storage"),
+            battery: d.shows("battery"),
+        }
     }
 }
 
@@ -56,6 +62,7 @@ pub struct Collector {
     interface: Option<String>,
     mounts: Vec<String>,
     removable: bool,
+    /// Show the battery reading in the deck's header.
     battery: bool,
     /// Smoothed battery power and the state it's for, so the time-left
     /// estimate doesn't jump around.
@@ -203,7 +210,7 @@ impl Collector {
             disks,
             gpu,
             top,
-            battery: if self.battery { self.cached_battery() } else { None },
+            battery: if self.battery || shown.battery { self.cached_battery() } else { None },
         }
     }
 
@@ -213,7 +220,9 @@ impl Collector {
             let b = self.battery();
             self.battery_read = Some((Instant::now(), b));
         }
-        self.battery_read.as_ref().and_then(|(_, b)| b.clone())
+        let mut b = self.battery_read.as_ref().and_then(|(_, b)| b.clone())?;
+        b.header = self.battery;
+        Some(b)
     }
 
     fn battery(&mut self) -> Option<crate::protocol::BatteryStats> {

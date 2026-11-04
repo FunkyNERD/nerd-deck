@@ -70,6 +70,7 @@ struct HostStats {
         uint8_t limit;  // charging stops here, percent
         bool ac;
         float charger_w;
+        bool header;  // show the reading in the header
     } battery;
 };
 

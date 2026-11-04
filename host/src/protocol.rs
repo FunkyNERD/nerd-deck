@@ -465,6 +465,13 @@ pub struct BatteryStats {
     /// The charger's negotiated power, when it reports one (USB-C PD).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub charger_w: Option<f32>,
+    /// Show the reading in the device's header; only sent when false.
+    #[serde(skip_serializing_if = "is_true")]
+    pub header: bool,
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 #[cfg(test)]
@@ -509,6 +516,14 @@ mod tests {
         // Firmware before 0.10.0 doesn't report its settings.
         let msg: DeviceMsg = serde_json::from_str(r#"{"type":"hello","fw":"0.9.0","proto":6}"#).unwrap();
         assert!(matches!(msg, DeviceMsg::Hello { display: None, .. }));
+    }
+
+    #[test]
+    fn battery_header_is_sent_only_when_off() {
+        let b = BatteryStats { percent: 50, state: "idle", header: true, ..Default::default() };
+        assert!(!serde_json::to_string(&b).unwrap().contains("header"));
+        let b = BatteryStats { header: false, ..b };
+        assert!(serde_json::to_string(&b).unwrap().contains(r#""header":false"#));
     }
 
     #[test]

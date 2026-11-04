@@ -1401,7 +1401,7 @@ void showBatteryTab(bool show) {
 
 void updateBattery(const HostStats& s) {
     showBatteryTab(s.battery.present);
-    if (!s.battery.present) {
+    if (!s.battery.present || !s.battery.header) {
         lv_obj_add_flag(batteryBox, LV_OBJ_FLAG_HIDDEN);
         return;
     }
