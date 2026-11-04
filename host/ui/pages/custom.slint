@@ -67,7 +67,9 @@ component PanelCard inherits Rectangle {
         wrap: word-wrap;
         overflow: elide;
     }
-    if root.cell.kind != 3: Text {
+    // Long text, like a quote, wraps under the title, as on the deck.
+    property <bool> wraps: root.cell.kind != 3 && root.cell.shows.character-count > 24;
+    if root.cell.kind != 3 && !root.wraps: Text {
         x: root.pad-x;
         y: (root.height - self.height) / 2 + 4px * root.scale;
         width: root.width - 2 * root.pad-x;
@@ -75,6 +77,17 @@ component PanelCard inherits Rectangle {
         font-size: min(28px * root.scale, root.height * 0.3);
         font-weight: 500;
         color: PanelLook.value-color(root.cell);
+        overflow: elide;
+    }
+    if root.wraps: Text {
+        x: root.pad-x;
+        y: root.pad-y + 18px * root.scale;
+        width: root.width - 2 * root.pad-x;
+        height: root.height - 2 * root.pad-y - (18px + (root.cell.note == "" ? 0 : 16px)) * root.scale;
+        text: root.cell.shows;
+        font-size: 14px * root.scale;
+        color: PanelLook.value-color(root.cell);
+        wrap: word-wrap;
         overflow: elide;
     }
     if root.cell.kind != 3: Text {
@@ -352,7 +365,49 @@ component PanelInspector inherits VerticalLayout {
                     accessible-label: "Web address";
                     edited(text) => { Backend.set-panel-field(root.tab, root.sel, "url", text); }
                 }
-                if root.cell.has-headers: Hint { text: "Sent with request headers from the config file."; }
+            }
+
+            if root.cell.kind <= 1: VerticalLayout {
+                spacing: 6px;
+                FieldLabel { text: "Request headers"; }
+                // Typing here doesn't rebuild the rows, so each field keeps
+                // what's typed until another panel is opened.
+                for header[i] in root.cell.headers: HorizontalLayout {
+                    spacing: 6px;
+                    LineEdit {
+                        min-width: 0;
+                        horizontal-stretch: 2;
+                        text: header.name;
+                        placeholder-text: "Name";
+                        accessible-label: "Header name";
+                        edited(text) => { Backend.set-panel-header-name(root.tab, root.sel, i, text); }
+                    }
+                    LineEdit {
+                        min-width: 0;
+                        horizontal-stretch: 3;
+                        text: header.value;
+                        input-type: InputType.password;
+                        placeholder-text: "Value";
+                        accessible-label: "Header value";
+                        edited(text) => { Backend.set-panel-header-value(root.tab, root.sel, i, text); }
+                    }
+                    PushButton {
+                        icon: Glyphs.cross;
+                        flat: true;
+                        accessible-label: "Remove header";
+                        clicked => { Backend.remove-panel-header(root.tab, root.sel, i); }
+                    }
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    PushButton {
+                        text: "Add header";
+                        icon: Glyphs.plus;
+                        flat: true;
+                        clicked => { Backend.add-panel-header(root.tab, root.sel); }
+                    }
+                }
+                Hint { text: "For an API key, like X-Api-Key. Kept in config.toml as typed; never sent to the deck."; }
             }
 
             if root.cell.kind == 0: VerticalLayout {

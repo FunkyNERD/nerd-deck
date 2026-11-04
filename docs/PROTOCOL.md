@@ -219,9 +219,10 @@ tab showed; its panels show `--` until a `panel` arrives.
 - `panels`: up to 12. `at` is a panel's top-left cell (column, row), and
   `span` the columns and rows it covers; the device keeps them inside the
   grid. `title` is up to 23 bytes.
-- `style`: how the device draws it. `value` is a number or a short text, as
-  big as it fits, with a note under it; `status` is the same with a coloured
-  dot beside the title; `text` is wrapped text.
+- `style`: how the device draws it. `value` is a number or a short text on one
+  line, as big as it fits, or longer text wrapped under the title, with a note
+  under it; `status` is the same with a coloured dot beside the title; `text`
+  is wrapped text.
 
 ### `panel`
 What one panel shows: `i` is its place in its tab's `panels`. The host sends
@@ -229,7 +230,7 @@ it when that changes.
 ```json
 {"type":"panel","tab":"infra","i":0,"text":"200","sub":"84 ms","state":"ok"}
 ```
-- `text`: up to 63 bytes, ASCII. `sub` (optional): the note under it, up to
+- `text`: up to 255 bytes, ASCII. `sub` (optional): the note under it, up to
   31 bytes; `text` panels have none.
 - `state` (optional): `ok`, `warn`, `err`, or `stale` (couldn't be refreshed:
   the last text, greyed, with the reason in `sub`). A status panel's dot takes

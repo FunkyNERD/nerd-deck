@@ -2144,17 +2144,38 @@ void buildPanel(lv_obj_t* page, Panel& p, const PanelDef& def, uint8_t cols, uin
     lv_obj_align(p.sub, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
-// The biggest font `text` fits in on one line, below the title and above the note.
-const lv_font_t* fitFont(const Panel& p, const char* text) {
-    static const lv_font_t* const kFonts[] = {&lv_font_montserrat_40, &lv_font_montserrat_28,
-                                              &lv_font_montserrat_20, &lv_font_montserrat_14};
-    const lv_coord_t room = p.h - 2 * 16;  // title and note
-    for (const lv_font_t* f : kFonts) {
-        lv_point_t size;
+// A value or status panel's text, between its title and its note: on one
+// line as big as it fits, like a number; else, like a quote, wrapped under the
+// title as big as it fits, and cut with dots when even the smallest doesn't.
+void layoutValue(const Panel& p, const char* text, bool note) {
+    constexpr lv_coord_t kTitleH = 18, kNoteH = 16;
+    const lv_coord_t room = p.h - kTitleH - (note ? kNoteH : 0);
+    lv_point_t size;
+    static const lv_font_t* const kOneLine[] = {&lv_font_montserrat_40, &lv_font_montserrat_28,
+                                                &lv_font_montserrat_20};
+    for (const lv_font_t* f : kOneLine) {
         lv_txt_get_size(&size, text, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-        if (size.x <= p.w && size.y <= room) return f;
+        if (size.x <= p.w && size.y <= room) {
+            lv_obj_set_style_text_font(p.value, f, 0);
+            lv_obj_set_size(p.value, p.w, LV_SIZE_CONTENT);
+            lv_obj_align(p.value, LV_ALIGN_LEFT_MID, 0, 4);
+            return;
+        }
     }
-    return kFonts[3];
+    static const lv_font_t* const kWrapped[] = {&lv_font_montserrat_20, &lv_font_montserrat_16,
+                                                &lv_font_montserrat_14, &lv_font_montserrat_12};
+    const lv_font_t* font = kWrapped[3];
+    for (const lv_font_t* f : kWrapped) {
+        lv_txt_get_size(&size, text, f, 0, 0, p.w, LV_TEXT_FLAG_NONE);
+        if (size.y <= room) {
+            font = f;
+            break;
+        }
+    }
+    lv_obj_set_style_text_font(p.value, font, 0);
+    // LV_LABEL_LONG_DOT wraps within the size it's given, dotting what's left over.
+    lv_obj_set_size(p.value, p.w, room);
+    lv_obj_align(p.value, LV_ALIGN_TOP_LEFT, 0, kTitleH);
 }
 
 uint32_t stateColor(PanelState s, uint32_t otherwise) {
@@ -2221,7 +2242,7 @@ void setPanel(const char* tab, size_t index, const char* text, const char* sub, 
         lv_obj_set_style_text_color(p.value, lv_color_hex(stateColor(state, kText)), 0);
         return;
     }
-    lv_obj_set_style_text_font(p.value, fitFont(p, text), 0);
+    layoutValue(p, text, *sub);
     lv_label_set_text(p.sub, sub);
     if (p.style == PanelStyle::Status) {
         lv_obj_set_style_bg_color(p.dot, lv_color_hex(stateColor(state, kTextFaint)), 0);

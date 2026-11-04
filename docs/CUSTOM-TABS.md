@@ -105,6 +105,58 @@ under it.
   `crit = 0.65` on the AUD -> USD panel. With `crit` below `warn`, lower is
   worse.
 
+## Example: an API that needs a key
+
+Many APIs want a key sent as a request header. [API Ninjas](https://api-ninjas.com)
+takes one in `X-Api-Key`. Without it, it answers `{"error": "Missing API Key."}`
+with HTTP 400, which the panel shows as `HTTP 400` under its last value. Its
+exchange rate endpoint gives the rate for a currency pair:
+
+```toml
+[[tab.panel]]
+kind = "url"
+title = "USD -> AUD"
+url = "https://api.api-ninjas.com/v1/exchangerate?pair=USD_AUD"
+json = "/exchange_rate"
+headers = { X-Api-Key = "your key here" }
+prefix = "$"
+decimals = 4
+interval = 3600
+```
+
+The key stays on the PC, in `config.toml` as written: it's sent with the
+request and never to the deck. Anyone who can read your config can read the
+key. The settings window saves the config readable by you only; if you edit it
+by hand, `chmod 600 ~/.config/nerd-deck/config.toml` does the same.
+
+In the settings window, a Web value or Status panel has **Request headers**:
+**Add header** adds a row named `X-Api-Key`, ready for the key, which is
+hidden as you type it. Use **Test** to check the field name in `json`
+against what the API really sends.
+
+Panels with the same URL but different headers make separate requests: the
+answer may depend on the key.
+
+## Example: a quote
+
+API Ninjas' quotes endpoint answers with a list of quotes, each with its
+author. A wide panel shows the quote, wrapped, with the author under it:
+
+```toml
+[[tab.panel]]
+kind = "url"
+title = "Quote"
+url = "https://api.api-ninjas.com/v2/quotes"
+headers = { X-Api-Key = "your key here" }
+json = "/0/quote"          # the first quote in the list
+sub_json = "/0/author"
+span = [3, 1]              # the full width of a 3-column grid
+interval = 3600
+```
+
+The more room a panel has, the bigger its text: a quote on a panel two rows
+high reads more easily than on one.
+
 ## Tabs
 
 ```toml
@@ -221,10 +273,12 @@ unit are left out. Write `C`, `EUR` or `->` instead.
 ## On the deck
 
 - A `url` or `command` panel shows its value as big as it fits on one line,
-  with the note in small text under it.
+  with the note in small text under it. A value too long for one line, like a
+  quote, wraps under the title instead, as big as it fits; whatever still
+  doesn't fit ends in `...`.
 - A `status` panel adds a coloured dot beside its title.
 - A `text` panel wraps its text.
-- Values are cut to 63 characters, and notes to 31.
+- Values are cut to 255 characters, and notes to 31.
 - With more than five tabs shown, the header's tab pills get narrower. With all
   eight, the open tab's pill shows just its icon.
 
@@ -242,8 +296,8 @@ On the **Custom tabs** page:
   the deck follows within a moment. A change that wouldn't fit the grid is
   refused, with a message saying why.
 
-Request headers, `timeout` and `slow_ms` are only set in the config file. The
-settings window keeps them as they are.
+`timeout` and `slow_ms` are only set in the config file. The settings window
+keeps them as they are.
 
 ## Protocol
 

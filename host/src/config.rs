@@ -218,8 +218,10 @@ pub struct PanelConfig {
     #[serde(default)]
     pub sub_json: Option<String>,
     /// Sent with the request, say for an API key. Never sent to the deck.
-    #[serde(default)]
-    pub headers: std::collections::BTreeMap<String, String>,
+    /// A table in the file; a list here, so the settings window can edit
+    /// one without the rest moving.
+    #[serde(default, deserialize_with = "header_list")]
+    pub headers: Vec<(String, String)>,
     /// For `command`: run with `sh -c`, like a button's.
     #[serde(default)]
     pub command: Option<String>,
@@ -253,6 +255,10 @@ pub struct PanelConfig {
     /// Columns and rows it covers.
     #[serde(default = "default_span")]
     pub span: [u8; 2],
+}
+
+fn header_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(String, String)>, D::Error> {
+    Ok(std::collections::BTreeMap::<String, String>::deserialize(d)?.into_iter().collect())
 }
 
 fn default_slow_ms() -> u64 {

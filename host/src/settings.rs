@@ -683,7 +683,12 @@ impl State {
             shows: shows.into(),
             note: note.into(),
             state: state.into(),
-            has_headers: !p.headers.is_empty(),
+            headers: ModelRc::new(VecModel::from(
+                p.headers
+                    .iter()
+                    .map(|(name, value)| PanelHeader { name: name.into(), value: value.into() })
+                    .collect::<Vec<_>>(),
+            )),
         }
     }
 
@@ -1158,9 +1163,14 @@ fn write_tabs(doc: &mut DocumentMut, tabs: &[TabConfig]) {
                 if let Some(v) = text(&p.url) {
                     put("url", v);
                 }
-                if !p.headers.is_empty() {
-                    let headers: toml_edit::InlineTable =
-                        p.headers.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect();
+                // Without the ones still being named.
+                let headers: toml_edit::InlineTable = p
+                    .headers
+                    .iter()
+                    .filter(|(k, _)| !k.trim().is_empty())
+                    .map(|(k, v)| (k.trim(), Value::from(v.as_str())))
+                    .collect();
+                if !headers.is_empty() {
                     put("headers", Value::InlineTable(headers));
                 }
             }
@@ -1293,12 +1303,18 @@ fn shift(t: &mut Table, from: isize) {
     }
 }
 
+/// Writes the config so it's never half written, and readable by its owner
+/// only: it can hold API keys.
 fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
     let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, text)?;
+    // A leftover would keep its own permissions.
+    let _ = fs::remove_file(&tmp);
+    fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?.write_all(text.as_bytes())?;
     fs::rename(&tmp, path)
 }
 
@@ -2114,6 +2130,47 @@ fn connect(ui: &SettingsWindow, state: &Rc<RefCell<State>>) {
             st.save(&ui);
         }
     });
+    on!(on_add_panel_header, |ui, st, t, p| {
+        let changed = st.edit_panel(&ui, t as usize, p as usize, |panel| {
+            // The header most APIs take a key in, unless it's there already.
+            let name = if panel.headers.iter().any(|(k, _)| k == "X-Api-Key") { "" } else { "X-Api-Key" };
+            panel.headers.push((name.into(), String::new()));
+        });
+        if changed {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    on!(on_remove_panel_header, |ui, st, t, p, i| {
+        let changed = st.edit_panel(&ui, t as usize, p as usize, |panel| {
+            if (i as usize) < panel.headers.len() {
+                panel.headers.remove(i as usize);
+            }
+        });
+        if changed {
+            st.refresh_custom(&ui);
+            st.save(&ui);
+        }
+    });
+    // Typing: saved once it stops, without rebuilding the rows being typed in.
+    let header_setter = |name: bool| {
+        let ui_weak = ui.as_weak();
+        let state = state.clone();
+        move |t: i32, p: i32, i: i32, text: SharedString| {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            let mut st = state.borrow_mut();
+            let changed = st.edit_panel(&ui, t as usize, p as usize, |panel| {
+                if let Some((k, v)) = panel.headers.get_mut(i as usize) {
+                    *if name { k } else { v } = text.to_string();
+                }
+            });
+            if changed {
+                st.save_later(&ui, &state);
+            }
+        }
+    };
+    b.on_set_panel_header_name(header_setter(true));
+    b.on_set_panel_header_value(header_setter(false));
     on!(on_test_panel, |ui, st, t, p| {
         let (t, p) = (t as usize, p as usize);
         let Some(tab) = st.tabs.get(t) else { return };
@@ -2538,6 +2595,20 @@ mod tests {
         // Everything outside the buttons is untouched, comments included.
         let head = |t: &str| t[..t.find("[[button]]").unwrap()].to_owned();
         assert_eq!(head(&text), head(config::EXAMPLE));
+    }
+
+    #[test]
+    fn writes_the_config_for_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("nerd-deck-private-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "# readable by all\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o664)).unwrap();
+        write_atomically(&path, "# keys\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# keys\n");
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

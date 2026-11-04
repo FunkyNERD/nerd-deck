@@ -79,6 +79,12 @@ export struct CustomTab {
     interval: int,
 }
 
+// A request header a web panel sends.
+export struct PanelHeader {
+    name: string,
+    value: string,
+}
+
 // One of the open custom tab's panels, being edited.
 export struct PanelCell {
     // 0 a value from the web, 1 a URL's status, 2 a command, 3 text.
@@ -109,8 +115,8 @@ export struct PanelCell {
     note: string,
     // "ok", "warn", "err", "stale" or "".
     state: string,
-    // Request headers are in the config; they're kept as they are.
-    has-headers: bool,
+    // Sent with a web panel's request, say an API key.
+    headers: [PanelHeader],
 }
 
 export struct KnownDeck {
@@ -209,6 +215,11 @@ export global Backend {
     // Choices, by name: decimals, interval, w, h.
     callback set-panel-choice(int, int, string, int);
     callback test-panel(int, int);
+    // A web panel's request headers, by their place in its list.
+    callback add-panel-header(int, int);
+    callback remove-panel-header(int, int, int);
+    callback set-panel-header-name(int, int, int, string);
+    callback set-panel-header-value(int, int, int, string);
 
     // Stats
     in property <[string]> intervals;

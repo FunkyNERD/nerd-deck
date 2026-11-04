@@ -20,8 +20,9 @@ use crate::config::{PanelConfig, PanelKind, TabConfig};
 use crate::notifications::clean;
 use crate::protocol::PanelValue;
 
-/// The most of a panel's text the deck gets, and of its note.
-const MAX_TEXT: usize = 63;
+/// The most of a panel's text the deck gets (a quote wraps), and of its note.
+/// Well inside a protocol line.
+const MAX_TEXT: usize = 255;
 const MAX_SUB: usize = 31;
 /// The most of a page or a command's output that's read.
 const MAX_BODY: u64 = 1 << 20;
@@ -58,7 +59,7 @@ impl Request {
     fn of(p: &PanelConfig) -> Option<Self> {
         matches!(p.kind, PanelKind::Url | PanelKind::Status).then(|| Self {
             url: p.url.clone().unwrap_or_default(),
-            headers: p.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            headers: p.headers.iter().filter(|(k, _)| !k.trim().is_empty()).cloned().collect(),
         })
     }
 }
@@ -369,7 +370,7 @@ fn ask(request: &Request, timeout: Duration) -> Result<Answer, String> {
         .into();
     let mut get = agent.get(&request.url);
     for (name, value) in &request.headers {
-        get = get.header(name, value);
+        get = get.header(name.trim(), value);
     }
     let mut response = get.call().map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
@@ -515,6 +516,43 @@ mod tests {
         assert_eq!(got[&2], "200");
         assert_eq!(got[&3], "2026-11-04");
         assert_eq!(hits.load(Ordering::SeqCst), 2, "one request per URL");
+    }
+
+    #[test]
+    fn sends_headers() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        // A server that answers with the key it was given.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                let key = request.lines().find_map(|l| l.strip_prefix("x-api-key: ")).unwrap_or("none").to_owned();
+                seen.lock().unwrap().push(key.clone());
+                let body = format!(r#"{{"key":"{key}"}}"#);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/v1/x");
+        let with_key = |key: &str| -> PanelConfig {
+            toml::from_str(&format!("kind='url'\nurl='{url}'\njson='/key'\nheaders={{ X-Api-Key = '{key}' }}")).unwrap()
+        };
+        assert_eq!(fetch(&with_key("abc123")).unwrap().text, "abc123");
+        // Different keys are different requests.
+        assert_ne!(Request::of(&with_key("a")), Request::of(&with_key("b")));
+        assert_eq!(asked.lock().unwrap().as_slice(), ["abc123"]);
     }
 
     #[test]
