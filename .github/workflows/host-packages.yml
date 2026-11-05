@@ -31,6 +31,12 @@ on:
 jobs:
   packages:
     name: Build .deb and .rpm
+    # A release pushes the release commit to main and its tag together, and each
+    # push starts a run. The tag's run builds the same commit and publishes it, so
+    # the branch run for a release commit is skipped.
+    if: >-
+      ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') &&
+        startsWith(github.event.head_commit.message, 'chore(release)')) }}
     runs-on: docker
     container:
       image: ubuntu:22.04
