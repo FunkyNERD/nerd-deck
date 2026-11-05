@@ -1,6 +1,5 @@
-# Builds the device firmware (firmware/package.sh) on every push and pull request
-# that touches it, and keeps it as a run artifact. Pushing a firmware-v* tag also
-# publishes it as a release on git.hazaar.dev, with notes listing the firmware's
+# Builds the device firmware (firmware/package.sh) when a firmware-v* tag is pushed,
+# and publishes it as a release on git.hazaar.dev, with notes listing the firmware's
 # commits since its previous release (.github/scripts/release-notes.sh):
 #
 #   (bump FW_VERSION in firmware/src/config.hpp, commit)
@@ -15,26 +14,14 @@ name: Firmware
 
 on:
   push:
-    branches: [main]
     tags: ['firmware-v*']
-    # Tag pushes always run; GitHub doesn't apply path filters to them.
-    paths: &paths
-      - 'firmware/**'
-      - '.github/workflows/firmware.yml'
-      - '.github/scripts/**'
-  pull_request:
-    paths: *paths
+  # A manual run builds the firmware and keeps it as a run artifact, without
+  # publishing anything: for trying out changes to the build or this workflow.
   workflow_dispatch:
 
 jobs:
   firmware:
     name: Build firmware
-    # A release pushes the release commit to main and its tag together, and each
-    # push starts a run. The tag's run builds the same commit and publishes it, so
-    # the branch run for a release commit is skipped.
-    if: >-
-      ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') &&
-        startsWith(github.event.head_commit.message, 'chore(release)')) }}
     runs-on: docker
     # The runner's own image is Alpine, whose musl the ESP32 toolchains can't run on.
     container:

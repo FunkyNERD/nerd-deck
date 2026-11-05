@@ -324,8 +324,8 @@ created on first start:
 systemctl --user enable --now nerd-deck
 ```
 
-CI builds both packages on every push that touches the app
-(`.github/workflows/host-packages.yml`) and keeps them as a run artifact.
+CI builds both packages when an app release is tagged
+(`.github/workflows/host-packages.yml`) and attaches them to the release.
 To build the packages locally:
 
 ```bash

@@ -1,7 +1,6 @@
-# Builds the host app's .deb and .rpm (host/packaging/build-packages.sh) on every push
-# and pull request that touches the app, and keeps them as a run artifact. Pushing a
-# host-v* tag also publishes them as a release on git.hazaar.dev, with notes listing the app's
-# commits since its previous release (.github/scripts/release-notes.sh):
+# Builds the host app's .deb and .rpm (host/packaging/build-packages.sh) when a host-v*
+# tag is pushed, and publishes them as a release on git.hazaar.dev, with notes listing
+# the app's commits since its previous release (.github/scripts/release-notes.sh):
 #
 #   (bump version in host/Cargo.toml, commit)
 #   git tag host-v1.2.3 && git push origin main host-v1.2.3
@@ -16,27 +15,14 @@ name: Host packages
 
 on:
   push:
-    branches: [main]
     tags: ['host-v*']
-    # Tag pushes always run; GitHub doesn't apply path filters to them.
-    paths: &paths
-      - 'host/**'
-      - 'docs/**'
-      - '.github/workflows/host-packages.yml'
-      - '.github/scripts/**'
-  pull_request:
-    paths: *paths
+  # A manual run builds the packages and keeps them as a run artifact, without
+  # publishing anything: for trying out changes to the build or this workflow.
   workflow_dispatch:
 
 jobs:
   packages:
     name: Build .deb and .rpm
-    # A release pushes the release commit to main and its tag together, and each
-    # push starts a run. The tag's run builds the same commit and publishes it, so
-    # the branch run for a release commit is skipped.
-    if: >-
-      ${{ !(github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') &&
-        startsWith(github.event.head_commit.message, 'chore(release)')) }}
     runs-on: docker
     container:
       image: ubuntu:22.04
