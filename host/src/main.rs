@@ -605,7 +605,7 @@ impl Host {
                         deck_board = board.clone().unwrap_or_else(|| firmware::LEGACY_BOARD.into());
                         if let Some(boards) = &self.firmware_boards {
                             if firmware::chip(&deck_board).is_some() {
-                                boards.lock().unwrap().insert(deck_board.clone());
+                                boards.insert(deck_board.clone());
                             }
                         }
                         // The device rebooted, so it lost any notice.

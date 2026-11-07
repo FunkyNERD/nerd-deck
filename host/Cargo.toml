@@ -80,3 +80,9 @@ assets = [
     { source = "packaging/nerd-deck.svg", dest = "/usr/share/icons/hicolor/scalable/apps/nerd-deck.svg", mode = "644" },
     { source = "config.example.toml", dest = "/usr/share/doc/nerd-deck/config.example.toml", mode = "644", doc = true },
 ]
+
+# Lets the blocking crate's idle pool threads exit, rather than wake every
+# 500 ms forever: see vendor/blocking/README.nerd-deck.md. Remove once a
+# release of blocking after 1.7.0 fixes it.
+[patch.crates-io]
+blocking = { path = "vendor/blocking" }

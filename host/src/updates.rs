@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,8 +30,6 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_IMAGE: u64 = 16 * 1024 * 1024;
 /// The app's packages are a few megabytes.
 const MAX_PACKAGE: u64 = 64 * 1024 * 1024;
-/// How often the firmware download looks for a newly seen board.
-const BOARD_POLL: Duration = Duration::from_secs(30);
 
 /// The newest release, when it's newer than this build. `seq` goes up with
 /// every check that finds one, so the notice is shown again each day.
@@ -441,7 +439,22 @@ pub fn download_firmware(release: &FirmwareRelease) -> Result<PathBuf> {
 }
 
 /// The boards to keep firmware downloaded for: those of the decks seen so far.
-pub type Boards = Arc<Mutex<BTreeSet<String>>>;
+/// Adding one wakes the download.
+#[derive(Clone, Default)]
+pub struct Boards(Arc<(Mutex<BTreeSet<String>>, Condvar)>);
+
+impl Boards {
+    pub fn new(boards: BTreeSet<String>) -> Self {
+        Self(Arc::new((Mutex::new(boards), Condvar::new())))
+    }
+
+    pub fn insert(&self, board: String) {
+        let (set, added) = &*self.0;
+        if set.lock().unwrap().insert(board) {
+            added.notify_all();
+        }
+    }
+}
 
 /// For the service while it keeps the deck up to date: downloads new firmware
 /// for each board in `boards` at startup and then daily, and straight away
@@ -450,10 +463,11 @@ pub fn fetch_firmware(boards: Boards) {
     let spawned = thread::Builder::new()
         .name("firmware-fetch".into())
         .spawn(move || {
+            let (set, added) = &*boards.0;
             let mut fetched = BTreeSet::new();
             let mut next = Instant::now();
             loop {
-                let wanted = boards.lock().unwrap().clone();
+                let wanted = set.lock().unwrap().clone();
                 if Instant::now() >= next || wanted != fetched {
                     let mut ok = true;
                     for board in &wanted {
@@ -469,7 +483,11 @@ pub fn fetch_firmware(boards: Boards) {
                     fetched = wanted;
                     next = Instant::now() + if ok { CHECK_EVERY } else { RETRY_AFTER };
                 }
-                thread::sleep(BOARD_POLL);
+                // Until the next check, or a board is added.
+                let guard = set.lock().unwrap();
+                let _ = added
+                    .wait_timeout_while(guard, next.saturating_duration_since(Instant::now()), |set| *set == fetched)
+                    .unwrap();
             }
         });
     if let Err(e) = spawned {

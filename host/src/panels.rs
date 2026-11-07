@@ -28,8 +28,6 @@ const MAX_SUB: usize = 31;
 const MAX_BODY: u64 = 1 << 20;
 /// How often a running command is checked on.
 const COMMAND_POLL: Duration = Duration::from_millis(50);
-/// The longest the thread waits with nothing due, in case the clock jumps.
-const IDLE: Duration = Duration::from_secs(60);
 
 /// A panel's new content.
 pub struct Update {
@@ -130,7 +128,8 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
     let mut generation = 0;
     loop {
         let now = Instant::now();
-        let mut wake = now + IDLE;
+        // None: nothing shown, so nothing is due until an event says so.
+        let mut wake: Option<Instant> = None;
         let mut due = Vec::new();
         for (ti, tab) in tabs.iter().enumerate().filter(|(_, t)| shown.contains(&t.id)) {
             for (pi, panel) in tab.panels.iter().enumerate() {
@@ -139,11 +138,11 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
                     continue;
                 }
                 if slot.next > now {
-                    wake = wake.min(slot.next);
+                    wake = Some(wake.map_or(slot.next, |w| w.min(slot.next)));
                     continue;
                 }
                 slot.next = now + Duration::from_secs(panel.interval(tab));
-                wake = wake.min(slot.next);
+                wake = Some(wake.map_or(slot.next, |w| w.min(slot.next)));
                 due.push((ti, pi));
             }
         }
@@ -193,7 +192,11 @@ fn run(events: Receiver<Event>, done: Sender<Event>, updates: Sender<Update>) {
             }
         }
 
-        match events.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+        let event = match wake {
+            Some(wake) => events.recv_timeout(wake.saturating_duration_since(Instant::now())),
+            None => events.recv().map_err(|_| RecvTimeoutError::Disconnected),
+        };
+        match event {
             Ok(Event::Config(t)) => {
                 generation += 1;
                 let now = Instant::now();
