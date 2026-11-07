@@ -51,8 +51,10 @@ enum Kind {
 pub struct Gpu {
     /// The latest reading; None once the GPU turns out to be unreadable.
     latest: Arc<Mutex<Option<GpuStats>>>,
-    /// Set while the deck's System tab is off: nothing is read.
+    /// Set while the deck's System tab is off, or there's no deck: nothing
+    /// is read, and the thread sleeps until it's cleared.
     paused: Arc<AtomicBool>,
+    thread: thread::Thread,
 }
 
 impl Gpu {
@@ -65,15 +67,18 @@ impl Gpu {
         let shared = latest.clone();
         let paused = Arc::new(AtomicBool::new(false));
         let paused_shared = paused.clone();
-        thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name("gpu".into())
             .spawn(move || watch(kind, &device, &shared, &paused_shared))
             .ok()?;
-        Some(Self { latest, paused })
+        Some(Self { latest, paused, thread: spawned.thread().clone() })
     }
 
     pub fn pause(&self, paused: bool) {
-        self.paused.store(paused, Ordering::Relaxed);
+        self.paused.store(paused, Ordering::Release);
+        if !paused {
+            self.thread.unpark();
+        }
     }
 
     pub fn latest(&self) -> Option<GpuStats> {
@@ -84,9 +89,9 @@ impl Gpu {
 fn watch(kind: Kind, device: &Path, latest: &Mutex<Option<GpuStats>>, paused: &AtomicBool) {
     let mut poller = Poller::default();
     loop {
-        if paused.load(Ordering::Relaxed) {
-            thread::sleep(POLL);
-            continue;
+        // Parked, not polled: a paused watcher costs nothing.
+        while paused.load(Ordering::Acquire) {
+            thread::park();
         }
         let now = Instant::now();
         match poller.poll(awake(device), now) {

@@ -20,7 +20,7 @@ mod updates;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,8 @@ use protocol::{
     PROTO_VERSION,
 };
 
+/// Before trying again after an error, or between looks for the deck when
+/// udev can't say when ports come and go.
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// The device says hello on boot and in reply to ours, well within this.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -158,11 +160,18 @@ struct Host {
     updates: Option<updates::Shared>,
     /// The boards to keep firmware downloaded for, once that's started.
     firmware_boards: Option<updates::Boards>,
-    notifications: Option<Receiver<notifications::Raw>>,
+    /// Only while a deck that has said hello is connected, and the config
+    /// turns them on.
+    notifications: Option<notifications::Watcher>,
     seen_apps: notifications::SeenApps,
     flashing: firmware::Flashing,
     api: api::Service,
     commands: Receiver<Command>,
+    /// For the host's own threads to wake it: see `Command::PortsChanged`.
+    wake: Sender<Command>,
+    /// udev says when serial ports come and go, so a wait for the deck
+    /// needs no timer.
+    ports_watched: bool,
     /// Refreshes custom tabs' panels, for the tabs the deck shows.
     panels: Panels,
     /// What each custom tab's panels show, by tab id and place, for a deck
@@ -173,6 +182,13 @@ struct Host {
 impl Host {
     fn new(config_path: Option<PathBuf>, cfg: Config) -> Self {
         let (tx, commands) = mpsc::channel();
+        let wake = tx.clone();
+        let ports_watched = {
+            let wake = wake.clone();
+            device::watch_ports(move || {
+                let _ = wake.send(Command::PortsChanged);
+            })
+        };
         let status = api::Status {
             version: env!("CARGO_PKG_VERSION").into(),
             config: config_path
@@ -195,6 +211,8 @@ impl Host {
             seen_apps: notifications::SeenApps::load(),
             api: api::Service::start(status, tx),
             commands,
+            wake,
+            ports_watched,
             panels: Panels::start(cfg.tabs.clone()),
             panel_values: BTreeMap::new(),
             cfg,
@@ -205,7 +223,10 @@ impl Host {
 
     fn start_watchers(&mut self) {
         if self.cfg.updates.check && self.updates.is_none() {
-            self.updates = Some(updates::watch());
+            let wake = self.wake.clone();
+            self.updates = Some(updates::watch(move || {
+                let _ = wake.send(Command::UpdateFound);
+            }));
         }
         if self.cfg.updates.firmware && self.firmware_boards.is_none() {
             // Decks seen before, and any that say hello from now on.
@@ -213,14 +234,27 @@ impl Host {
             updates::fetch_firmware(boards.clone());
             self.firmware_boards = Some(boards);
         }
-        if self.cfg.notifications.enabled && self.notifications.is_none() {
+    }
+
+    /// Watch desktop notifications only while there's a deck to show them,
+    /// and the config wants them.
+    fn watch_notifications(&mut self, deck: bool) {
+        let wanted = deck && self.cfg.notifications.enabled;
+        if wanted && self.notifications.is_none() {
             self.notifications = Some(notifications::watch());
+        } else if !wanted {
+            self.notifications = None;
         }
     }
 
     fn run(mut self) -> Result<()> {
         loop {
-            match self.run_session() {
+            let ended = self.run_session();
+            // Nothing to read stats or notifications for until a deck is back.
+            self.collector.show(Shown::NONE);
+            self.watch_notifications(false);
+            let mut wait = Some(RECONNECT_DELAY);
+            match ended {
                 Ok(SessionEnd::Flash(port, fw)) => {
                     self.api.update(|s| {
                         disconnected(s);
@@ -247,11 +281,13 @@ impl Host {
                     self.api.update(disconnected);
                     continue;
                 }
+                // Until something is plugged in or out.
+                Ok(SessionEnd::NoDevice) if self.ports_watched => wait = None,
                 Ok(SessionEnd::NoDevice) => {}
                 Err(e) => log::warn!("{e:#}; retrying in {}s", RECONNECT_DELAY.as_secs()),
             }
             self.api.update(disconnected);
-            self.idle(RECONNECT_DELAY);
+            self.idle(wait);
         }
     }
 
@@ -265,17 +301,34 @@ impl Host {
         available
     }
 
-    /// Wait between connection attempts, still answering commands.
-    fn idle(&mut self, wait: Duration) {
+    /// Wait between connection attempts, still answering commands: for `wait`,
+    /// or with None until a serial port comes or goes.
+    fn idle(&mut self, wait: Option<Duration>) {
         // No deck, so no panels to refresh.
         self.panels.show(HashSet::new());
         self.publish_update();
-        let until = Instant::now() + wait;
-        while let Ok(cmd) = self.commands.recv_timeout(until.saturating_duration_since(Instant::now()))
-        {
+        let until = wait.map(|wait| Instant::now() + wait);
+        loop {
+            let cmd = match until {
+                Some(until) => self.commands.recv_timeout(until.saturating_duration_since(Instant::now())).ok(),
+                // Can't hang up: `self.wake` is a sender.
+                None => self.commands.recv().ok(),
+            };
+            let Some(cmd) = cmd else { return };
             match cmd {
                 Command::Reload(reply) => {
-                    let _ = reply.send(self.reload().map(drop).map_err(|e| format!("{e:#}")));
+                    let reloaded = self.reload();
+                    let device_changed = matches!(reloaded, Ok(true));
+                    let _ = reply.send(reloaded.map(drop).map_err(|e| format!("{e:#}")));
+                    self.publish_update();
+                    // Somewhere else to look.
+                    if device_changed {
+                        return;
+                    }
+                }
+                Command::PortsChanged => return,
+                Command::UpdateFound => {
+                    self.publish_update();
                 }
                 Command::TestNotification { reply, .. }
                 | Command::InstallFirmware { reply, .. }
@@ -283,11 +336,6 @@ impl Host {
                     let _ = reply.send(Err("the deck isn't connected".into()));
                 }
             }
-        }
-        // Notifications that came in meanwhile are old news by the time the
-        // deck is back.
-        if let Some(rx) = &self.notifications {
-            rx.try_iter().for_each(drop);
         }
     }
 
@@ -420,7 +468,7 @@ impl Host {
 
             // Kept for after the hello.
             let incoming: Vec<_> = if said_hello {
-                self.notifications.iter().flat_map(|rx| rx.try_iter()).collect()
+                self.notifications.iter().flat_map(|w| w.rx.try_iter()).collect()
             } else {
                 Vec::new()
             };
@@ -442,6 +490,7 @@ impl Host {
                             if device_changed {
                                 return Ok(SessionEnd::Reconnect);
                             }
+                            self.watch_notifications(said_hello);
                             if said_hello {
                                 send_stats_ms(&self.cfg, &mut conn)?;
                                 buttons_sent = shows(deck_display.as_ref(), "controls");
@@ -470,6 +519,10 @@ impl Host {
                             conn.send(&HostMsg::Display { change, stats_ms: None })?;
                         }
                     }
+                    // Handled once the session ends.
+                    Command::PortsChanged => {}
+                    // The loop publishes it each time round.
+                    Command::UpdateFound => {}
                     Command::InstallFirmware { path, reply } => {
                         let fw = firmware::Image::load(path.as_ref()).map_err(|e| format!("{e:#}")).and_then(|fw| {
                             // Updates only: never the same or an older version.
@@ -542,6 +595,7 @@ impl Host {
                     }
                     if let DeviceMsg::Hello { fw, board, proto, tile: t, display } = &msg {
                         said_hello = true;
+                        self.watch_notifications(true);
                         // It may have rebooted, and lost them.
                         buttons_sent = false;
                         custom_tabs = *proto >= PROTO_CUSTOM_TABS;

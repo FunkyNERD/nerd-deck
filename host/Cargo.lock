@@ -3381,6 +3381,7 @@ dependencies = [
  "image",
  "ksni",
  "libc",
+ "libudev",
  "log",
  "serde",
  "serde_json",

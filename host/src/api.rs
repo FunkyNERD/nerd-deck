@@ -76,6 +76,11 @@ pub enum Command {
     InstallFirmware { path: String, reply: Reply },
     /// Change the connected deck's settings: a protocol::DisplayChange as JSON.
     SetDisplay { change: String, reply: Reply },
+    // From the host's own threads, so a wait for the deck needs no timer:
+    /// A serial port came or went.
+    PortsChanged,
+    /// The update check found a newer release.
+    UpdateFound,
 }
 
 /// The service's side: holds the status and tells clients when it changes.

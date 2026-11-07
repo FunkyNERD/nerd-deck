@@ -152,7 +152,8 @@ pub struct FirmwareCheck {
 }
 
 /// Starts the checker thread and returns what it has found so far.
-pub fn watch() -> Shared {
+/// `on_found` is called each time it finds a newer release.
+pub fn watch(on_found: impl Fn() + Send + 'static) -> Shared {
     let found: Shared = Arc::default();
     let shared = found.clone();
     let spawned = thread::Builder::new()
@@ -171,6 +172,7 @@ pub fn watch() -> Shared {
                             log::info!("nerd-deck {version} is available: {}", release.html_url);
                             seq += 1;
                             *shared.lock().unwrap() = Some(Available { version, seq });
+                            on_found();
                         } else {
                             log::debug!("up to date (latest release {version})");
                         }

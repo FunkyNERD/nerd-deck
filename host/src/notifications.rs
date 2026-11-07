@@ -9,7 +9,9 @@
 
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -61,28 +63,68 @@ enum Urgency {
     Critical,
 }
 
+/// Copies desktop notifications off the session bus while it's alive.
+/// Dropping it leaves the bus at once, so nothing wakes for notifications
+/// nobody will see.
+pub struct Watcher {
+    pub rx: Receiver<Raw>,
+    stop: Arc<Stop>,
+}
+
+#[derive(Default)]
+struct Stop {
+    stopped: AtomicBool,
+    /// The monitor's connection, closed to end its wait for the next message.
+    bus: Mutex<Option<Connection>>,
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        self.stop.stopped.store(true, Ordering::Release);
+        if let Some(bus) = self.stop.bus.lock().unwrap().take() {
+            let _ = bus.close();
+        }
+        log::debug!("stopped watching desktop notifications");
+    }
+}
+
 /// Watch the session bus on a background thread. Notifications arrive on the
-/// returned channel unfiltered; `filter` applies the config, so a reloaded
+/// watcher's channel unfiltered; `filter` applies the config, so a reloaded
 /// config takes effect at once.
-pub fn watch() -> Receiver<Raw> {
+pub fn watch() -> Watcher {
     let (tx, rx) = mpsc::channel();
+    let stop = Arc::new(Stop::default());
+    let stopping = stop.clone();
     thread::spawn(move || loop {
-        match monitor(&tx) {
-            Ok(()) => return, // the receiver is gone
+        match monitor(&tx, &stopping) {
+            Ok(()) => return,
+            Err(_) if stopping.stopped.load(Ordering::Acquire) => return,
             Err(e) => log::warn!(
                 "desktop notifications: {e:#}; retrying in {}s",
                 RETRY_DELAY.as_secs()
             ),
         }
         thread::sleep(RETRY_DELAY);
+        if stopping.stopped.load(Ordering::Acquire) {
+            return;
+        }
     });
-    rx
+    Watcher { rx, stop }
 }
 
-/// Runs until the bus connection fails (an error) or `tx`'s receiver is
-/// dropped (Ok).
-fn monitor(tx: &Sender<Raw>) -> Result<()> {
+/// Runs until the bus connection fails (an error), or the watcher is dropped
+/// or `tx`'s receiver is (Ok).
+fn monitor(tx: &Sender<Raw>, stop: &Stop) -> Result<()> {
     let bus = Connection::session().context("connecting to the session bus")?;
+    {
+        // Checked under the lock, so a drop either sees this connection or
+        // has already said stop.
+        let mut slot = stop.bus.lock().unwrap();
+        if stop.stopped.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        *slot = Some(bus.clone());
+    }
     // A monitor can't send, so Do Not Disturb is looked up on a second connection.
     let dnd = Connection::session().context("connecting to the session bus")?;
 
@@ -97,6 +139,9 @@ fn monitor(tx: &Sender<Raw>) -> Result<()> {
     log::info!("watching desktop notifications");
 
     for msg in messages {
+        if stop.stopped.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let msg = msg?;
         let header = msg.header();
         if header.message_type() != Type::MethodCall {

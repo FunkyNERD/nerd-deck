@@ -1,4 +1,6 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
+use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -45,6 +47,69 @@ pub fn serial_devices() -> Vec<String> {
     names
 }
 
+/// Watch udev for serial devices coming and going, on a background thread,
+/// and call `changed` for each. Returns false if udev can't be watched; the
+/// caller then has to look for itself now and then.
+///
+/// udev's events come after its rules have run, so a new port already has
+/// the permissions it will get.
+pub fn watch_ports(changed: impl Fn() + Send + 'static) -> bool {
+    let (ready_tx, ready) = mpsc::sync_channel(1);
+    let spawned = thread::Builder::new().name("port-watch".into()).spawn(move || {
+        // Made here: udev's handles can't move between threads.
+        let monitor = libudev::Context::new().and_then(|udev| {
+            let mut monitor = libudev::Monitor::new(&udev)?;
+            monitor.match_subsystem("tty")?;
+            monitor.listen()
+        });
+        let mut monitor = match monitor {
+            Ok(monitor) => {
+                let _ = ready_tx.send(Ok(()));
+                monitor
+            }
+            Err(e) => {
+                let _ = ready_tx.send(Err(e.to_string()));
+                return;
+            }
+        };
+        let mut pfd = libc::pollfd { fd: monitor.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        loop {
+            // SAFETY: one valid pollfd, and `monitor` keeps the fd open.
+            if unsafe { libc::poll(&mut pfd, 1, -1) } < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == ErrorKind::Interrupted {
+                    continue;
+                }
+                log::warn!("watching for serial ports: {err}; looking every few seconds instead");
+                return;
+            }
+            let mut any = false;
+            while let Some(event) = monitor.receive_event() {
+                use libudev::EventType::{Add, Remove};
+                if matches!(event.event_type(), Add | Remove) {
+                    log::debug!("{} {:?}", event.event_type(), event.sysname());
+                    any = true;
+                }
+            }
+            if any {
+                changed();
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("can't start the serial port watcher: {e}");
+        return false;
+    }
+    match ready.recv() {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            log::warn!("can't watch udev for serial ports ({e}); looking every few seconds instead");
+            false
+        }
+        Err(_) => false,
+    }
+}
+
 /// Resolve which serial port to use: the configured one, or the first USB
 /// port matching the configured VID/PID.
 pub fn find_port(cfg: &DeviceConfig) -> Result<Port> {
@@ -61,6 +126,10 @@ pub fn find_ports(cfg: &DeviceConfig) -> Result<Vec<Port>> {
         _ => None,
     };
     if let Some(name) = &cfg.port {
+        // Not plugged in: nothing to open, and nothing to retry until it is.
+        if !Path::new(name).exists() {
+            return Ok(Vec::new());
+        }
         let usb = ports.iter().find(|p| &p.port_name == name).and_then(usb);
         return Ok(vec![Port { name: name.clone(), usb }]);
     }

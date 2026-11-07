@@ -43,6 +43,9 @@ impl Default for Shown {
 }
 
 impl Shown {
+    /// No deck: nothing is read.
+    pub const NONE: Self = Self { system: false, network: false, storage: false, battery: false };
+
     pub fn of(d: &DisplaySettings) -> Self {
         Self {
             system: d.shows("system"),

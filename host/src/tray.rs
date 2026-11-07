@@ -25,8 +25,10 @@ pub const APP_NAME: &str = "nerd-deck";
 /// Held while the tray runs, so a second one exits.
 const TRAY_NAME: &str = "io.github.FunkyNERD.NerdDeck.Tray";
 
-/// Status is also polled, in case a signal is missed while the service restarts.
-const POLL: Duration = Duration::from_secs(5);
+/// After the service starts or stops, status is read again this much later,
+/// in case a StatusChanged went out before the new instance's signals were
+/// matched. Otherwise nothing is polled.
+const SETTLE: Duration = Duration::from_secs(2);
 
 const RELEASES: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases");
 
@@ -62,16 +64,17 @@ pub fn run() -> Result<()> {
             Err(e) => log::warn!("not watching for status changes: {e}"),
         });
     }
-    {
-        let refresh = refresh.clone();
-        thread::spawn(move || match api::service_comings_and_goings(&bus) {
-            Ok(changes) => changes.for_each(|_| refresh()),
-            Err(e) => log::warn!("not watching for the service starting and stopping: {e}"),
-        });
+    match api::service_comings_and_goings(&bus) {
+        Ok(changes) => changes.for_each(|_| {
+            refresh();
+            thread::sleep(SETTLE);
+            refresh();
+        }),
+        Err(e) => log::warn!("not watching for the service starting and stopping: {e}"),
     }
+    // The tray stays up whatever happened to the watch.
     loop {
-        thread::sleep(POLL);
-        refresh();
+        thread::park();
     }
 }
 
